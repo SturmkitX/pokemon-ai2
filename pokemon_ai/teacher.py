@@ -77,6 +77,8 @@ class TeacherConfig:
     overwrite: bool = False
     enable_xformers: bool = False
     cpu_offload: bool = False
+    vae_slicing: bool = False
+    vae_tiling: bool = False
     validate_hf_refs: bool = True
     diffusers_progress: bool = False
 
@@ -368,13 +370,21 @@ def build_pipeline(config: TeacherConfig):
 
     pipe.set_progress_bar_config(disable=not config.diffusers_progress)
 
-    try:
-        pipe.enable_vae_slicing()
-        pipe.enable_vae_tiling()
-    except AttributeError:
-        pass
+    if config.vae_slicing:
+        try:
+            pipe.vae.enable_slicing()
+        except AttributeError:
+            pipe.enable_vae_slicing()
+
+    if config.vae_tiling:
+        try:
+            pipe.vae.enable_tiling()
+        except AttributeError:
+            pipe.enable_vae_tiling()
 
     pose_detector = OpenposeDetector.from_pretrained(config.pose_detector_repo)
+    if config.device != "cpu" and not config.cpu_offload and hasattr(pose_detector, "to"):
+        pose_detector = pose_detector.to(config.device)
     return pipe, pose_detector
 
 

@@ -56,6 +56,8 @@ python -m pokemon_ai.teacher `
   --ip-adapter-subfolder models `
   --ip-adapter-weight ip-adapter_sd15.safetensors `
   --no-base-use-safetensors `
+  --no-vae-slicing `
+  --no-vae-tiling `
   --image-size 512 `
   --pose-detect-resolution 384 `
   --num-variants 1 `
