@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-train-timesteps", type=int, default=1000)
     parser.add_argument("--sample-steps", type=int, default=8)
     parser.add_argument("--sample-guidance-scale", type=float, default=1.5)
+    parser.add_argument("--noise-strength", type=float, default=0.65)
     parser.add_argument("--train-step-choices", default="4,8,12")
     parser.add_argument("--condition-drop-prob", type=float, default=0.1)
     parser.add_argument("--save-every-epochs", type=int, default=5)
@@ -83,6 +84,7 @@ def save_latent_samples(
     alpha_bars: torch.Tensor,
     sample_steps: int,
     guidance_scale: float,
+    noise_strength: float,
     seed: int,
     device: torch.device,
 ) -> None:
@@ -98,6 +100,7 @@ def save_latent_samples(
         num_steps=sample_steps,
         seed=seed,
         guidance_scale=guidance_scale,
+        noise_strength=noise_strength,
         device=device,
     )
     source = decode_latents(vae, source_latent).cpu()
@@ -150,7 +153,12 @@ def main() -> None:
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     _, _, alpha_bars = make_beta_schedule(args.num_train_timesteps, device)
     train_step_choices = parse_step_choices(args.train_step_choices)
-    timestep_pool = make_training_timestep_pool(args.num_train_timesteps, train_step_choices, device)
+    timestep_pool = make_training_timestep_pool(
+        args.num_train_timesteps,
+        train_step_choices,
+        device,
+        args.noise_strength,
+    )
 
     start_epoch = 0
     step = 0
@@ -210,6 +218,7 @@ def main() -> None:
                 sample_steps=args.sample_steps,
                 seed=args.seed + epoch,
                 guidance_scale=args.sample_guidance_scale,
+                noise_strength=args.noise_strength,
                 device=device,
             )
 

@@ -94,16 +94,26 @@ def parse_step_choices(value: str) -> list[int]:
     return choices
 
 
-def make_inference_timesteps(num_train_timesteps: int, num_steps: int, device: torch.device) -> torch.Tensor:
-    return torch.linspace(num_train_timesteps - 1, 0, num_steps, device=device).long()
+def make_inference_timesteps(
+    num_train_timesteps: int,
+    num_steps: int,
+    device: torch.device,
+    noise_strength: float = 1.0,
+) -> torch.Tensor:
+    start = max(1, min(num_train_timesteps - 1, int((num_train_timesteps - 1) * noise_strength)))
+    return torch.linspace(start, 0, num_steps, device=device).long()
 
 
 def make_training_timestep_pool(
     num_train_timesteps: int,
     step_choices: list[int],
     device: torch.device,
+    noise_strength: float = 1.0,
 ) -> torch.Tensor:
-    pools = [make_inference_timesteps(num_train_timesteps, steps, device) for steps in step_choices]
+    pools = [
+        make_inference_timesteps(num_train_timesteps, steps, device, noise_strength)
+        for steps in step_choices
+    ]
     return torch.unique(torch.cat(pools)).long()
 
 
@@ -117,11 +127,14 @@ def sample_latents(
     num_steps: int,
     seed: int,
     guidance_scale: float,
+    noise_strength: float,
     device: torch.device,
 ) -> torch.Tensor:
     generator = torch.Generator(device=device).manual_seed(seed)
-    latent = torch.randn(shape, generator=generator, device=device)
-    timesteps = make_inference_timesteps(alpha_bars.numel(), num_steps, device)
+    noise = torch.randn(shape, generator=generator, device=device)
+    timesteps = make_inference_timesteps(alpha_bars.numel(), num_steps, device, noise_strength)
+    start_a = alpha_bars[timesteps[0]].view(1, 1, 1, 1)
+    latent = start_a.sqrt() * source_latent + (1.0 - start_a).sqrt() * noise
     for index, timestep in enumerate(timesteps):
         t = torch.full((shape[0],), int(timestep.item()), device=device, dtype=torch.long)
         if guidance_scale == 1.0:

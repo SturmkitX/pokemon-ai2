@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--sample-steps", type=int, default=8)
     parser.add_argument("--guidance-scale", type=float, default=1.5)
+    parser.add_argument("--noise-strength", type=float, default=0.65)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--device", default="")
     return parser.parse_args()
@@ -67,6 +68,7 @@ def main() -> None:
             num_steps=args.sample_steps,
             seed=args.seed,
             guidance_scale=args.guidance_scale,
+            noise_strength=args.noise_strength,
             device=device,
         )
         output = vae.decode((generated_latent / scaling).to(dtype=vae_dtype)).sample.squeeze(0).cpu()

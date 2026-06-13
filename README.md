@@ -150,6 +150,7 @@ python -m pokemon_ai.train_latent `
   --epochs 80 `
   --base-channels 128 `
   --sample-steps 8 `
+  --noise-strength 0.65 `
   --train-step-choices 4,8,12 `
   --save-every-epochs 5 `
   --sample-every-epochs 2 `
@@ -163,7 +164,9 @@ python -m pokemon_ai.infer_latent `
   --checkpoint runs/latent-student-pokemon-sd15-v3-256/checkpoints/latest.pt `
   --input path/to/human.png `
   --output out/latent-pokemon-human.png `
-  --sample-steps 8
+  --sample-steps 8 `
+  --noise-strength 0.65 `
+  --guidance-scale 1.5
 ```
 
 Older one-pass pixel student:
