@@ -474,7 +474,7 @@ def generate_batch(
         negative_prompt=[config.negative_prompt] * len(jobs),
         image=[job.source_image for job in jobs],
         control_image=[job.pose_image for job in jobs],
-        ip_adapter_image=[job.source_image for job in jobs],
+        ip_adapter_image=[[job.source_image for job in jobs]],
         num_inference_steps=config.num_inference_steps,
         guidance_scale=config.guidance_scale,
         strength=config.strength,
