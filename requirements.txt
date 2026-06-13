@@ -1,0 +1,11 @@
+torch
+torchvision
+pillow
+tqdm
+numpy
+diffusers
+transformers
+accelerate
+controlnet-aux
+opencv-python
+safetensors

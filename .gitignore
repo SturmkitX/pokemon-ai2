@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+data/
+cache/
+runs/
+out/
+tmp_smoke/
+
+*.pt
+*.pth
+*.onnx
+*.torchscript
