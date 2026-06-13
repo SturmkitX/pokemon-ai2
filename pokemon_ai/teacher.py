@@ -5,13 +5,14 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import torch
 from PIL import Image, ImageOps
 from tqdm import tqdm
 
 from .dataset import VALID_EXTS
+from .hf_validate import HfValidationTarget, validate_hf_references
 
 
 DEFAULT_PROMPT = (
@@ -32,7 +33,15 @@ DEFAULT_NEGATIVE_PROMPT = (
 
 @dataclass
 class TeacherConfig:
-    raw_dir: str = "data/raw_humans"
+    hf_dataset: str = "nlphuji/flickr30k"
+    hf_config: str = ""
+    hf_split: str = "test"
+    hf_image_column: str = "image"
+    hf_caption_column: str = "caption"
+    hf_caption_filter: str = "person,people,man,woman,boy,girl,wearing,standing,sitting"
+    hf_streaming: bool = False
+    max_source_images: int = 200
+    raw_dir: str = ""
     pair_input_dir: str = "data/pairs/input"
     pair_target_dir: str = "data/pairs/target"
     cache_dir: str = "cache/teacher-sdxl"
@@ -59,6 +68,15 @@ class TeacherConfig:
     overwrite: bool = False
     enable_xformers: bool = False
     cpu_offload: bool = False
+    validate_hf_refs: bool = True
+
+
+@dataclass
+class SourceImage:
+    name: str
+    image: Image.Image
+    source: str
+    cache_key: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,15 +92,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def image_fingerprint(path: Path, image_size: int) -> str:
+def file_fingerprint(path: Path, image_size: int) -> str:
     stat = path.stat()
     raw = f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{image_size}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def fit_rgb(path: Path, image_size: int) -> Image.Image:
+def stable_fingerprint(raw: str, image_size: int) -> str:
+    return hashlib.sha1(f"{raw}:{image_size}".encode("utf-8")).hexdigest()
+
+
+def fit_rgb_image(image: Image.Image, image_size: int) -> Image.Image:
+    return ImageOps.fit(image.convert("RGB"), (image_size, image_size), method=Image.Resampling.LANCZOS)
+
+
+def fit_rgb_path(path: Path, image_size: int) -> Image.Image:
     image = Image.open(path).convert("RGB")
-    return ImageOps.fit(image, (image_size, image_size), method=Image.Resampling.LANCZOS)
+    return fit_rgb_image(image, image_size)
 
 
 def discover_images(raw_dir: Path) -> list[Path]:
@@ -107,6 +133,108 @@ def load_completed(state_path: Path) -> set[str]:
         if record.get("status") == "done":
             completed.add(str(record.get("pair_name")))
     return completed
+
+
+def caption_matches(row: dict[str, Any], column: str, filters: list[str]) -> bool:
+    if not filters or not column:
+        return True
+    value = row.get(column)
+    if value is None:
+        return True
+    if isinstance(value, list):
+        text = " ".join(str(item) for item in value).lower()
+    else:
+        text = str(value).lower()
+    return any(item in text for item in filters)
+
+
+def pil_from_hf_value(value: Any) -> Image.Image:
+    if isinstance(value, Image.Image):
+        return value.convert("RGB")
+    if isinstance(value, dict):
+        if isinstance(value.get("bytes"), bytes):
+            import io
+
+            return Image.open(io.BytesIO(value["bytes"])).convert("RGB")
+        if value.get("path"):
+            return Image.open(value["path"]).convert("RGB")
+    if isinstance(value, (str, Path)):
+        return Image.open(value).convert("RGB")
+    raise TypeError(f"Unsupported Hugging Face image value type: {type(value)!r}")
+
+
+def cache_source_image(cache_dir: Path, source: SourceImage) -> Path:
+    source_dir = cache_dir / "sources"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    path = source_dir / f"{source.cache_key}.png"
+    if not path.exists():
+        source.image.save(path)
+    return path
+
+
+def iter_hf_sources(config: TeacherConfig, cache_dir: Path) -> Iterator[SourceImage]:
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise ImportError(
+            "Hugging Face dataset loading requires the datasets package. Install with: pip install datasets"
+        ) from exc
+
+    dataset_args: list[str] = [config.hf_dataset]
+    if config.hf_config:
+        dataset_args.append(config.hf_config)
+    dataset = load_dataset(*dataset_args, split=config.hf_split, streaming=config.hf_streaming)
+    filters = [item.strip().lower() for item in config.hf_caption_filter.split(",") if item.strip()]
+
+    count = 0
+    for row_index, row in enumerate(dataset):
+        if count >= config.max_source_images:
+            break
+        if not caption_matches(row, config.hf_caption_column, filters):
+            continue
+        try:
+            image = pil_from_hf_value(row[config.hf_image_column])
+        except Exception:
+            continue
+        source_id = f"hf:{config.hf_dataset}:{config.hf_config}:{config.hf_split}:{row_index}"
+        cache_key = stable_fingerprint(source_id, config.image_size)
+        source = SourceImage(
+            name=f"hf_{count:06d}",
+            image=fit_rgb_image(image, config.image_size),
+            source=source_id,
+            cache_key=cache_key,
+        )
+        cache_source_image(cache_dir, source)
+        yield source
+        count += 1
+
+
+def iter_local_sources(config: TeacherConfig, cache_dir: Path) -> Iterator[SourceImage]:
+    raw_dir = Path(config.raw_dir)
+    if not raw_dir.exists():
+        raise FileNotFoundError(f"Raw image directory does not exist: {raw_dir}")
+    images = discover_images(raw_dir)
+    if not images:
+        raise RuntimeError(f"No source images found in {raw_dir}")
+    for source_path in images[: config.max_source_images]:
+        source = SourceImage(
+            name=source_path.stem,
+            image=fit_rgb_path(source_path, config.image_size),
+            source=str(source_path),
+            cache_key=file_fingerprint(source_path, config.image_size),
+        )
+        cache_source_image(cache_dir, source)
+        yield source
+
+
+def iter_sources(config: TeacherConfig, cache_dir: Path) -> Iterator[SourceImage]:
+    if config.hf_dataset:
+        yield from iter_hf_sources(config, cache_dir)
+        return
+    if config.raw_dir:
+        yield from iter_local_sources(config, cache_dir)
+        return
+    raise ValueError("Set --hf-dataset or --raw-dir before generating teacher pairs")
 
 
 def append_state(state_path: Path, record: dict[str, Any]) -> None:
@@ -185,13 +313,12 @@ def build_pipeline(config: TeacherConfig):
 def cached_pose(
     pose_detector: Any,
     image: Image.Image,
-    source_path: Path,
+    cache_key: str,
     cache_dir: Path,
-    image_size: int,
 ) -> Image.Image:
     pose_dir = cache_dir / "poses"
     pose_dir.mkdir(parents=True, exist_ok=True)
-    pose_path = pose_dir / f"{image_fingerprint(source_path, image_size)}.png"
+    pose_path = pose_dir / f"{cache_key}.png"
     if pose_path.exists():
         return Image.open(pose_path).convert("RGB")
     pose = pose_detector(image)
@@ -200,42 +327,51 @@ def cached_pose(
     return pose
 
 
-def output_name(source: Path, variant: int, num_variants: int) -> str:
+def output_name(source_name: str, variant: int, num_variants: int) -> str:
     if num_variants == 1:
-        return source.stem
-    return f"{source.stem}_v{variant:03d}"
+        return source_name
+    return f"{source_name}_v{variant:03d}"
 
 
 def main() -> None:
     config = TeacherConfig(**vars(parse_args()))
-    raw_dir = Path(config.raw_dir)
     pair_input_dir = Path(config.pair_input_dir)
     pair_target_dir = Path(config.pair_target_dir)
     cache_dir = Path(config.cache_dir)
     state_path = Path(config.state_path)
 
-    if not raw_dir.exists():
-        raise FileNotFoundError(f"Raw image directory does not exist: {raw_dir}")
-
     pair_input_dir.mkdir(parents=True, exist_ok=True)
     pair_target_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    images = discover_images(raw_dir)
-    if not images:
-        raise RuntimeError(f"No source images found in {raw_dir}")
+    if config.validate_hf_refs:
+        validate_hf_references(
+            HfValidationTarget(
+                hf_dataset=config.hf_dataset,
+                hf_config=config.hf_config,
+                hf_split=config.hf_split,
+                base_model=config.base_model,
+                controlnet_model=config.controlnet_model,
+                ip_adapter_repo=config.ip_adapter_repo,
+                ip_adapter_subfolder=config.ip_adapter_subfolder,
+                ip_adapter_weight=config.ip_adapter_weight,
+                pose_detector_repo=config.pose_detector_repo,
+            )
+        )
 
     completed = load_completed(state_path) if not config.overwrite else set()
     pipe, pose_detector = build_pipeline(config)
 
-    total = len(images) * config.num_variants
+    total = config.max_source_images * config.num_variants
     processed = 0
-    for image_index, source_path in enumerate(tqdm(images, desc="teacher pairs")):
-        source_image = fit_rgb(source_path, config.image_size)
-        pose_image = cached_pose(pose_detector, source_image, source_path, cache_dir, config.image_size)
+    source_count = 0
+    for image_index, source in enumerate(tqdm(iter_sources(config, cache_dir), total=config.max_source_images, desc="teacher pairs")):
+        source_count += 1
+        source_image = source.image
+        pose_image = cached_pose(pose_detector, source_image, source.cache_key, cache_dir)
 
         for variant in range(config.num_variants):
-            pair_name = output_name(source_path, variant, config.num_variants)
+            pair_name = output_name(source.name, variant, config.num_variants)
             input_path = pair_input_dir / f"{pair_name}.png"
             target_path = pair_target_dir / f"{pair_name}.png"
             processed += 1
@@ -245,7 +381,7 @@ def main() -> None:
             if target_path.exists() and not config.overwrite:
                 append_state(
                     state_path,
-                    {"pair_name": pair_name, "source": str(source_path), "target": str(target_path), "status": "done"},
+                    {"pair_name": pair_name, "source": source.source, "target": str(target_path), "status": "done"},
                 )
                 continue
 
@@ -271,10 +407,11 @@ def main() -> None:
                 state_path,
                 {
                     "pair_name": pair_name,
-                    "source": str(source_path),
+                    "source": source.source,
                     "input": str(input_path),
                     "target": str(target_path),
-                    "pose": str(cache_dir / "poses" / f"{image_fingerprint(source_path, config.image_size)}.png"),
+                    "source_cache": str(cache_dir / "sources" / f"{source.cache_key}.png"),
+                    "pose": str(cache_dir / "poses" / f"{source.cache_key}.png"),
                     "variant": variant,
                     "status": "done",
                 },
@@ -283,6 +420,11 @@ def main() -> None:
             if processed % config.save_every == 0:
                 save_progress(cache_dir, config, processed, total)
 
+    if source_count == 0:
+        raise RuntimeError(
+            "No usable source images were found. Try a different --hf-dataset, --hf-split, "
+            "--hf-image-column, or loosen --hf-caption-filter."
+        )
     save_progress(cache_dir, config, processed, total)
 
 

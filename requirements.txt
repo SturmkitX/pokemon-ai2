@@ -3,6 +3,7 @@ torchvision
 pillow
 tqdm
 numpy
+datasets
 diffusers
 transformers
 accelerate

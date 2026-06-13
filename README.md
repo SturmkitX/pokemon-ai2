@@ -8,10 +8,11 @@ human image -> compact U-Net generator -> stylized Pokemon-like output
 
 The intended workflow is:
 
-1. Use a stronger offline teacher model to create paired examples.
-2. Put human inputs in `data/pairs/input`.
-3. Put matching stylized targets in `data/pairs/target`.
-4. Train this compact student for fast inference.
+1. Pull source human/person images from a Hugging Face dataset.
+2. Use a stronger offline teacher model to create paired examples.
+3. Write human inputs to `data/pairs/input`.
+4. Write matching stylized targets to `data/pairs/target`.
+5. Train this compact student for fast inference.
 
 Matching is filename-based. For example:
 
@@ -28,17 +29,22 @@ pip install -r requirements.txt
 
 ## Generate Teacher Pairs
 
-Put raw human images in:
+Generate paired training targets from a Hugging Face image dataset:
 
-```text
-data/raw_humans
+```powershell
+python -m pokemon_ai.validate_hf
 ```
 
-Then generate paired training targets:
+That preflight checks the default dataset, model repos, dataset split, and IP-Adapter weight path.
 
 ```powershell
 python -m pokemon_ai.teacher `
-  --raw-dir data/raw_humans `
+  --hf-dataset nlphuji/flickr30k `
+  --hf-split test `
+  --hf-image-column image `
+  --hf-caption-column caption `
+  --hf-caption-filter "person,people,man,woman,boy,girl,wearing,standing,sitting" `
+  --max-source-images 200 `
   --pair-input-dir data/pairs/input `
   --pair-target-dir data/pairs/target `
   --cache-dir cache/teacher-sdxl `
@@ -50,6 +56,26 @@ python -m pokemon_ai.teacher `
   --controlnet-scale 0.7 `
   --ip-adapter-scale 0.45 `
   --save-every 2
+```
+
+`nlphuji/flickr30k` is the default because it gives ordinary real-world images and captions, which lets the script filter toward images likely to contain people. You can replace it with any Hugging Face dataset that has an image column.
+
+For a dataset without captions, pass an empty caption filter:
+
+```powershell
+python -m pokemon_ai.teacher `
+  --hf-dataset your/dataset `
+  --hf-split train `
+  --hf-image-column image `
+  --hf-caption-column "" `
+  --hf-caption-filter "" `
+  --max-source-images 500
+```
+
+Manual local photos are still supported by disabling HF and setting `--raw-dir`:
+
+```powershell
+python -m pokemon_ai.teacher --hf-dataset "" --raw-dir data/raw_humans
 ```
 
 The default teacher stack is:
