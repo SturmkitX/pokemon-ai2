@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,7 @@ def main() -> None:
     run_dir = Path(config.run_dir)
     checkpoint_dir = run_dir / "checkpoints"
     sample_dir = run_dir / "samples"
+    metrics_path = run_dir / "metrics.csv"
     save_config(config, run_dir / "config.json")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,6 +94,12 @@ def main() -> None:
         start_step = int(resume_state.get("step", 0))
         start_epoch = int(resume_state.get("epoch", 0))
         print(f"Resumed from {args.resume} at epoch {start_epoch}, step {start_step}")
+
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    if not metrics_path.exists() or start_step == 0:
+        with metrics_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["step", "epoch", "loss_g", "loss_d", "loss_l1", "loss_perc", "loss_gan"])
 
     recon_loss = CharbonnierLoss()
     gan_loss = nn.MSELoss()
@@ -155,6 +163,19 @@ def main() -> None:
                     "gan": f"{loss_gan.item():.3f}",
                 }
             )
+            with metrics_path.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    [
+                        step,
+                        epoch + 1,
+                        f"{loss_g.item():.6f}",
+                        f"{loss_d.item():.6f}",
+                        f"{loss_l1.item():.6f}",
+                        f"{loss_perc.item():.6f}",
+                        f"{loss_gan.item():.6f}",
+                    ]
+                )
 
             if step % config.sample_every_steps == 0:
                 generator.eval()
