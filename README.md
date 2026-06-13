@@ -86,7 +86,8 @@ The default teacher stack is:
 ```text
 Base model:        stabilityai/stable-diffusion-xl-base-1.0
 Pose ControlNet:   xinsir/controlnet-openpose-sdxl-1.0
-IP-Adapter:        h94/IP-Adapter, sdxl_models/ip-adapter_sdxl_vit-h.safetensors
+IP-Adapter:        h94/IP-Adapter, sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors
+Image encoder:     h94/IP-Adapter, models/image_encoder
 Pose detector:     lllyasviel/ControlNet OpenPose annotator
 ```
 

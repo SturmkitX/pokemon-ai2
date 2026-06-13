@@ -16,12 +16,10 @@ from .hf_validate import HfValidationTarget, validate_hf_references
 
 
 DEFAULT_PROMPT = (
-    "a full-body original collectible monster creature inspired by the input person, "
-    "non-human creature anatomy, expressive creature face matching the person's expression, "
-    "wearing simplified versions of the person's clothes and accessories, same watch if visible, "
-    "same dominant clothing colors, same pose and body attitude, charming game creature design, "
-    "clean bold silhouette, colorful hand-painted anime game art, polished concept art, "
-    "not a human, not a person in costume"
+    "original Pokemon-like creature, non-human monster anatomy, same pose, "
+    "matching expression, wearing simplified clothes and accessories from input, "
+    "same watch if visible, same clothing colors, clean bold silhouette, "
+    "colorful anime game concept art"
 )
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -52,8 +50,9 @@ class TeacherConfig:
     base_model: str = "stabilityai/stable-diffusion-xl-base-1.0"
     controlnet_model: str = "xinsir/controlnet-openpose-sdxl-1.0"
     ip_adapter_repo: str = "h94/IP-Adapter"
+    ip_adapter_image_encoder_folder: str = "models/image_encoder"
     ip_adapter_subfolder: str = "sdxl_models"
-    ip_adapter_weight: str = "ip-adapter_sdxl_vit-h.safetensors"
+    ip_adapter_weight: str = "ip-adapter-plus_sdxl_vit-h.safetensors"
     pose_detector_repo: str = "lllyasviel/ControlNet"
     prompt: str = DEFAULT_PROMPT
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
@@ -314,6 +313,7 @@ def build_pipeline(config: TeacherConfig):
         config.ip_adapter_repo,
         subfolder=config.ip_adapter_subfolder,
         weight_name=config.ip_adapter_weight,
+        image_encoder_folder=config.ip_adapter_image_encoder_folder,
     )
     pipe.set_ip_adapter_scale(config.ip_adapter_scale)
 
@@ -379,6 +379,7 @@ def main() -> None:
                 base_model=config.base_model,
                 controlnet_model=config.controlnet_model,
                 ip_adapter_repo=config.ip_adapter_repo,
+                ip_adapter_image_encoder_folder=config.ip_adapter_image_encoder_folder,
                 ip_adapter_subfolder=config.ip_adapter_subfolder,
                 ip_adapter_weight=config.ip_adapter_weight,
                 pose_detector_repo=config.pose_detector_repo,

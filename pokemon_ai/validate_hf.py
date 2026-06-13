@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
         "base_model",
         "controlnet_model",
         "ip_adapter_repo",
+        "ip_adapter_image_encoder_folder",
         "ip_adapter_subfolder",
         "ip_adapter_weight",
         "pose_detector_repo",

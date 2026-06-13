@@ -12,6 +12,7 @@ class HfValidationTarget:
     base_model: str
     controlnet_model: str
     ip_adapter_repo: str
+    ip_adapter_image_encoder_folder: str
     ip_adapter_subfolder: str
     ip_adapter_weight: str
     pose_detector_repo: str
@@ -36,6 +37,14 @@ def validate_hf_references(target: HfValidationTarget) -> None:
     if not file_exists(target.ip_adapter_repo, ip_adapter_path, repo_type="model"):
         raise FileNotFoundError(
             f"Missing IP-Adapter weight on Hugging Face: {target.ip_adapter_repo}/{ip_adapter_path}"
+        )
+    image_encoder_config = f"{target.ip_adapter_image_encoder_folder}/config.json".strip("/")
+    if target.ip_adapter_image_encoder_folder and not file_exists(
+        target.ip_adapter_repo, image_encoder_config, repo_type="model"
+    ):
+        raise FileNotFoundError(
+            f"Missing IP-Adapter image encoder config on Hugging Face: "
+            f"{target.ip_adapter_repo}/{image_encoder_config}"
         )
 
     if target.hf_dataset:
