@@ -11,6 +11,7 @@ class TrainConfig:
     input_dir: str = "data/pairs/input"
     target_dir: str = "data/pairs/target"
     cache_dir: str = "cache/pairs-256"
+    pair_name_regex: str = ""
     run_dir: str = "runs/student-256"
     image_size: int = 256
     batch_size: int = 4

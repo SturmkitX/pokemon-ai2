@@ -66,7 +66,13 @@ def main() -> None:
     save_config(config, run_dir / "config.json")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = PairedImageDataset(config.input_dir, config.target_dir, config.cache_dir, config.image_size)
+    dataset = PairedImageDataset(
+        config.input_dir,
+        config.target_dir,
+        config.cache_dir,
+        config.image_size,
+        config.pair_name_regex,
+    )
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 
 import torch
 from PIL import Image
@@ -40,11 +41,14 @@ class PairedImageDataset(Dataset):
         target_dir: str | Path,
         cache_dir: str | Path,
         image_size: int = 256,
+        pair_name_regex: str = "",
     ) -> None:
         self.input_dir = Path(input_dir)
         self.target_dir = Path(target_dir)
         self.cache_dir = Path(cache_dir)
         self.image_size = image_size
+        self.pair_name_regex = pair_name_regex
+        self._pair_name_pattern = re.compile(pair_name_regex) if pair_name_regex else None
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         if not self.input_dir.exists():
@@ -67,6 +71,8 @@ class PairedImageDataset(Dataset):
         pairs: list[tuple[Path, Path]] = []
         for input_path in sorted(self.input_dir.iterdir()):
             if not input_path.is_file() or input_path.suffix.lower() not in VALID_EXTS:
+                continue
+            if self._pair_name_pattern is not None and not self._pair_name_pattern.search(input_path.stem):
                 continue
             target_path = targets_by_stem.get(input_path.stem)
             if target_path is not None:
