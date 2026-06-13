@@ -24,6 +24,7 @@ class TrainConfig:
     lambda_l1: float = 40.0
     lambda_perceptual: float = 4.0
     lambda_gan: float = 1.0
+    gan_start_epoch: int = 5
     save_every_steps: int = 2
     sample_every_steps: int = 50
     max_steps: int | None = None

@@ -37,7 +37,8 @@ class Up(nn.Module):
     def __init__(self, in_channels: int, skip_channels: int, out_channels: int) -> None:
         super().__init__()
         self.up = nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, 4, stride=2, padding=1),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
             nn.InstanceNorm2d(out_channels, affine=True),
             nn.SiLU(inplace=True),
         )

@@ -103,25 +103,32 @@ def main() -> None:
         for batch in progress:
             source = batch["input"].to(device, non_blocking=True)
             target = batch["target"].to(device, non_blocking=True)
+            use_gan = epoch >= config.gan_start_epoch and config.lambda_gan > 0
+
+            if use_gan:
+                with torch.amp.autocast(device_type=device.type, enabled=config.amp and device.type == "cuda"):
+                    fake = generator(source)
+                    real_logits = discriminator(source, target)
+                    fake_logits = discriminator(source, fake.detach())
+                    loss_d = 0.5 * (
+                        gan_loss(real_logits, torch.ones_like(real_logits))
+                        + gan_loss(fake_logits, torch.zeros_like(fake_logits))
+                    )
+
+                optimizer_d.zero_grad(set_to_none=True)
+                scaler.scale(loss_d).backward()
+                scaler.step(optimizer_d)
+            else:
+                loss_d = torch.zeros((), device=device)
 
             with torch.amp.autocast(device_type=device.type, enabled=config.amp and device.type == "cuda"):
                 fake = generator(source)
-                real_logits = discriminator(source, target)
-                fake_logits = discriminator(source, fake.detach())
-                loss_d = 0.5 * (
-                    gan_loss(real_logits, torch.ones_like(real_logits))
-                    + gan_loss(fake_logits, torch.zeros_like(fake_logits))
-                )
-
-            optimizer_d.zero_grad(set_to_none=True)
-            scaler.scale(loss_d).backward()
-            scaler.step(optimizer_d)
-
-            with torch.amp.autocast(device_type=device.type, enabled=config.amp and device.type == "cuda"):
-                fake = generator(source)
-                fake_logits_for_g = discriminator(source, fake)
                 loss_l1 = recon_loss(fake, target)
-                loss_gan = gan_loss(fake_logits_for_g, torch.ones_like(fake_logits_for_g))
+                if use_gan:
+                    fake_logits_for_g = discriminator(source, fake)
+                    loss_gan = gan_loss(fake_logits_for_g, torch.ones_like(fake_logits_for_g))
+                else:
+                    loss_gan = torch.zeros((), device=device)
                 loss_perc = (
                     perceptual_loss(fake, target)
                     if perceptual_loss is not None
