@@ -17,19 +17,15 @@ from .hf_validate import HfValidationTarget, validate_hf_references
 
 
 DEFAULT_PROMPT = (
-    "a pokemon creature, non-human monster, same pose, matching expression, "
-    "wearing simplified clothes and accessories from input, same clothing colors, "
-    "cute creature design, finished clean game art, crisp outlines, sharp edges, "
-    "clean black contour linework, smooth cel shading, solid color regions, "
-    "complete polished character concept, high quality creature sprite art"
+    "pokemon creature, non-human monster, same pose and expression, "
+    "simplified input clothes and colors, cute design, clean black outlines, "
+    "smooth cel shading, sharp finished game sprite art"
 )
 
 DEFAULT_NEGATIVE_PROMPT = (
-    "human, humanoid, realistic person, person with animal ears, person with horns, cosplay, "
-    "human face, human skin texture, human body, tail attached to a person, horns on a person, "
-    "ordinary portrait, photorealistic, scary, horror, low quality, blurry, soft edges, "
-    "unfinished, incomplete, missing outline, sketch, messy linework, jagged contours, "
-    "muddy shading, rough coloring, noisy texture, text, watermark"
+    "human, humanoid, cosplay, human face, human body, photorealistic, "
+    "low quality, blurry, soft edges, unfinished, sketch, messy linework, "
+    "jagged contours, muddy shading, rough coloring, text, watermark"
 )
 
 
