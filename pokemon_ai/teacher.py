@@ -17,10 +17,9 @@ from .hf_validate import HfValidationTarget, validate_hf_references
 
 
 DEFAULT_PROMPT = (
-    "original Pokemon-like creature, non-human monster anatomy, same pose, "
-    "matching expression, wearing simplified clothes and accessories from input, "
-    "same watch if visible, same clothing colors, clean bold silhouette, "
-    "colorful anime game concept art"
+    "a pokemon creature, non-human monster, same pose, matching expression, "
+    "wearing simplified clothes and accessories from input, same clothing colors, "
+    "cute creature design, clean game art"
 )
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -50,23 +49,27 @@ class TeacherConfig:
     pair_target_dir: str = "data/pairs/target"
     cache_dir: str = "cache/teacher-sdxl"
     state_path: str = "runs/teacher-sdxl/state.jsonl"
-    base_model: str = "stabilityai/stable-diffusion-xl-base-1.0"
-    controlnet_model: str = "xinsir/controlnet-openpose-sdxl-1.0"
+    model_family: str = "sd15"
+    base_model: str = "lambda/sd-pokemon-diffusers"
+    controlnet_model: str = "lllyasviel/control_v11p_sd15_openpose"
+    base_use_safetensors: bool = False
+    controlnet_use_safetensors: bool = True
     ip_adapter_repo: str = "h94/IP-Adapter"
     ip_adapter_image_encoder_folder: str = "models/image_encoder"
-    ip_adapter_subfolder: str = "sdxl_models"
-    ip_adapter_weight: str = "ip-adapter-plus_sdxl_vit-h.safetensors"
+    ip_adapter_subfolder: str = "models"
+    ip_adapter_weight: str = "ip-adapter_sd15.safetensors"
     pose_detector_repo: str = "lllyasviel/ControlNet"
     prompt: str = DEFAULT_PROMPT
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
-    image_size: int = 768
+    image_size: int = 512
     pose_detect_resolution: int = 384
     num_variants: int = 1
-    num_inference_steps: int = 12
-    guidance_scale: float = 6.5
+    num_inference_steps: int = 10
+    guidance_scale: float = 8.0
     strength: float = 0.82
     controlnet_scale: float = 0.7
     ip_adapter_scale: float = 0.45
+    scheduler: str = "unipc"
     seed: int = 1337
     save_every: int = 2
     torch_dtype: str = "float16"
@@ -309,7 +312,13 @@ def dtype_from_name(name: str) -> torch.dtype:
 def build_pipeline(config: TeacherConfig):
     try:
         from controlnet_aux import OpenposeDetector
-        from diffusers import ControlNetModel, StableDiffusionXLControlNetImg2ImgPipeline
+        from diffusers import (
+            ControlNetModel,
+            DPMSolverMultistepScheduler,
+            StableDiffusionControlNetImg2ImgPipeline,
+            StableDiffusionXLControlNetImg2ImgPipeline,
+            UniPCMultistepScheduler,
+        )
     except ImportError as exc:
         raise ImportError(
             "Teacher generation requires extra packages. Install with: "
@@ -320,14 +329,27 @@ def build_pipeline(config: TeacherConfig):
     controlnet = ControlNetModel.from_pretrained(
         config.controlnet_model,
         torch_dtype=dtype,
-        use_safetensors=True,
+        use_safetensors=config.controlnet_use_safetensors,
     )
-    pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
-        config.base_model,
-        controlnet=controlnet,
-        torch_dtype=dtype,
-        use_safetensors=True,
+    pipeline_cls = (
+        StableDiffusionXLControlNetImg2ImgPipeline
+        if config.model_family == "sdxl"
+        else StableDiffusionControlNetImg2ImgPipeline
     )
+    pipeline_kwargs: dict[str, Any] = {
+        "controlnet": controlnet,
+        "torch_dtype": dtype,
+        "use_safetensors": config.base_use_safetensors,
+    }
+    if config.model_family == "sd15":
+        pipeline_kwargs["safety_checker"] = None
+        pipeline_kwargs["requires_safety_checker"] = False
+    pipe = pipeline_cls.from_pretrained(config.base_model, **pipeline_kwargs)
+    if config.scheduler == "unipc":
+        pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+    elif config.scheduler == "dpm":
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+
     pipe.load_ip_adapter(
         config.ip_adapter_repo,
         subfolder=config.ip_adapter_subfolder,

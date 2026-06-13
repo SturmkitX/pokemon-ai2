@@ -48,19 +48,26 @@ python -m pokemon_ai.teacher `
   --max-source-images 200 `
   --pair-input-dir data/pairs/input `
   --pair-target-dir data/pairs/target `
-  --cache-dir cache/teacher-sdxl `
-  --state-path runs/teacher-sdxl/state.jsonl `
-  --image-size 768 `
+  --cache-dir cache/teacher-pokemon-sd15 `
+  --state-path runs/teacher-pokemon-sd15/state.jsonl `
+  --model-family sd15 `
+  --base-model lambda/sd-pokemon-diffusers `
+  --controlnet-model lllyasviel/control_v11p_sd15_openpose `
+  --ip-adapter-subfolder models `
+  --ip-adapter-weight ip-adapter_sd15.safetensors `
+  --no-base-use-safetensors `
+  --image-size 512 `
   --pose-detect-resolution 384 `
   --num-variants 1 `
-  --num-inference-steps 12 `
+  --num-inference-steps 10 `
+  --guidance-scale 8.0 `
   --strength 0.82 `
   --controlnet-scale 0.7 `
   --ip-adapter-scale 0.45 `
   --save-every 2
 ```
 
-Diffusers' inner denoising progress bars are disabled by default so the outer `teacher pairs` bar is readable. Add `--diffusers-progress` if you want to see each denoising step. Per-pair timing is written into `runs/teacher-sdxl/state.jsonl`.
+Diffusers' inner denoising progress bars are disabled by default so the outer `teacher pairs` bar is readable. Add `--diffusers-progress` if you want to see each denoising step. Per-pair timing is written into `runs/teacher-pokemon-sd15/state.jsonl`.
 
 `detection-datasets/fashionpedia` is the default because it is script-free/parquet on Hugging Face and is fashion/person-centered instead of general scene photography. That gives better single-subject framing and stronger clothing/accessory signals than COCO.
 
@@ -98,12 +105,12 @@ Manual local photos are still supported by disabling HF and setting `--raw-dir`:
 python -m pokemon_ai.teacher --hf-dataset "" --raw-dir data/raw_humans
 ```
 
-The default teacher stack is:
+The default teacher stack is the faster Pokemon-specific SD 1.5 path:
 
 ```text
-Base model:        stabilityai/stable-diffusion-xl-base-1.0
-Pose ControlNet:   xinsir/controlnet-openpose-sdxl-1.0
-IP-Adapter:        h94/IP-Adapter, sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors
+Base model:        lambda/sd-pokemon-diffusers
+Pose ControlNet:   lllyasviel/control_v11p_sd15_openpose
+IP-Adapter:        h94/IP-Adapter, models/ip-adapter_sd15.safetensors
 Image encoder:     h94/IP-Adapter, models/image_encoder
 Pose detector:     lllyasviel/ControlNet OpenPose annotator
 ```
