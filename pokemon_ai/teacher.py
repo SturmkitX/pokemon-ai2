@@ -66,6 +66,7 @@ class TeacherConfig:
     image_size: int = 512
     pose_detect_resolution: int = 384
     num_variants: int = 1
+    generation_batch_size: int = 1
     num_inference_steps: int = 16
     guidance_scale: float = 8.5
     strength: float = 0.82
@@ -95,6 +96,20 @@ class SourceImage:
     image: Image.Image
     source: str
     cache_key: str
+
+
+@dataclass
+class PendingJob:
+    pair_name: str
+    source: SourceImage
+    source_image: Image.Image
+    pose_image: Image.Image
+    input_path: Path
+    target_path: Path
+    variant: int
+    seed: int
+    pose_seconds: float
+    queued_at: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -439,6 +454,62 @@ def postprocess_target(image: Image.Image, config: TeacherConfig) -> Image.Image
     )
 
 
+def generate_batch(
+    pipe: Any,
+    config: TeacherConfig,
+    jobs: list[PendingJob],
+    state_path: Path,
+    cache_dir: Path,
+) -> None:
+    if not jobs:
+        return
+
+    diffusion_start = time.perf_counter()
+    generators = [
+        torch.Generator(device=config.device).manual_seed(job.seed)
+        for job in jobs
+    ]
+    results = pipe(
+        prompt=[config.prompt] * len(jobs),
+        negative_prompt=[config.negative_prompt] * len(jobs),
+        image=[job.source_image for job in jobs],
+        control_image=[job.pose_image for job in jobs],
+        ip_adapter_image=[job.source_image for job in jobs],
+        num_inference_steps=config.num_inference_steps,
+        guidance_scale=config.guidance_scale,
+        strength=config.strength,
+        controlnet_conditioning_scale=config.controlnet_scale,
+        generator=generators,
+    ).images
+    diffusion_seconds = time.perf_counter() - diffusion_start
+    per_image_diffusion_seconds = diffusion_seconds / max(len(jobs), 1)
+
+    for job, result in zip(jobs, results, strict=True):
+        result = postprocess_target(result, config)
+        save_start = time.perf_counter()
+        job.source_image.save(job.input_path)
+        result.save(job.target_path)
+        save_seconds = time.perf_counter() - save_start
+        append_state(
+            state_path,
+            {
+                "pair_name": job.pair_name,
+                "source": job.source.source,
+                "input": str(job.input_path),
+                "target": str(job.target_path),
+                "source_cache": str(cache_dir / "sources" / f"{job.source.cache_key}.png"),
+                "pose": str(cache_dir / "poses" / f"{job.source.cache_key}.png"),
+                "variant": job.variant,
+                "batch_size": len(jobs),
+                "seconds_total": round(time.perf_counter() - job.queued_at, 3),
+                "seconds_pose": round(job.pose_seconds, 3),
+                "seconds_diffusion": round(per_image_diffusion_seconds, 3),
+                "seconds_save": round(save_seconds, 3),
+                "status": "done",
+            },
+        )
+
+
 def main() -> None:
     config = TeacherConfig(**vars(parse_args()))
     if torch.cuda.is_available():
@@ -476,6 +547,7 @@ def main() -> None:
     total = config.max_source_images * config.num_variants
     processed = 0
     source_count = 0
+    pending_jobs: list[PendingJob] = []
     for image_index, source in enumerate(tqdm(iter_sources(config, cache_dir), total=config.max_source_images, desc="teacher pairs")):
         pair_start = time.perf_counter()
         source_count += 1
@@ -505,49 +577,28 @@ def main() -> None:
                 )
                 continue
 
-            generator = torch.Generator(device=config.device).manual_seed(
-                config.seed + image_index * 1009 + variant
+            pending_jobs.append(
+                PendingJob(
+                    pair_name=pair_name,
+                    source=source,
+                    source_image=source_image,
+                    pose_image=pose_image,
+                    input_path=input_path,
+                    target_path=target_path,
+                    variant=variant,
+                    seed=config.seed + image_index * 1009 + variant,
+                    pose_seconds=pose_seconds,
+                    queued_at=pair_start,
+                )
             )
-            diffusion_start = time.perf_counter()
-            result = pipe(
-                prompt=config.prompt,
-                negative_prompt=config.negative_prompt,
-                image=source_image,
-                control_image=pose_image,
-                ip_adapter_image=source_image,
-                num_inference_steps=config.num_inference_steps,
-                guidance_scale=config.guidance_scale,
-                strength=config.strength,
-                controlnet_conditioning_scale=config.controlnet_scale,
-                generator=generator,
-            ).images[0]
-            result = postprocess_target(result, config)
-            diffusion_seconds = time.perf_counter() - diffusion_start
-
-            save_start = time.perf_counter()
-            source_image.save(input_path)
-            result.save(target_path)
-            save_seconds = time.perf_counter() - save_start
-            append_state(
-                state_path,
-                {
-                    "pair_name": pair_name,
-                    "source": source.source,
-                    "input": str(input_path),
-                    "target": str(target_path),
-                    "source_cache": str(cache_dir / "sources" / f"{source.cache_key}.png"),
-                    "pose": str(cache_dir / "poses" / f"{source.cache_key}.png"),
-                    "variant": variant,
-                    "seconds_total": round(time.perf_counter() - pair_start, 3),
-                    "seconds_pose": round(pose_seconds, 3),
-                    "seconds_diffusion": round(diffusion_seconds, 3),
-                    "seconds_save": round(save_seconds, 3),
-                    "status": "done",
-                },
-            )
+            if len(pending_jobs) >= config.generation_batch_size:
+                generate_batch(pipe, config, pending_jobs, state_path, cache_dir)
+                pending_jobs.clear()
 
             if processed % config.save_every == 0:
                 save_progress(cache_dir, config, processed, total)
+
+    generate_batch(pipe, config, pending_jobs, state_path, cache_dir)
 
     if source_count == 0:
         raise RuntimeError(

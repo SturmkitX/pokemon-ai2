@@ -45,7 +45,7 @@ python -m pokemon_ai.teacher `
   --hf-objects-column objects `
   --hf-object-category-column category `
   --hf-required-categories "" `
-  --max-source-images 200 `
+  --max-source-images 1000 `
   --pair-input-dir data/pairs/input `
   --pair-target-dir data/pairs/target `
   --cache-dir cache/teacher-pokemon-sd15 `
@@ -60,8 +60,9 @@ python -m pokemon_ai.teacher `
   --no-vae-tiling `
   --image-size 512 `
   --pose-detect-resolution 384 `
-  --num-variants 1 `
-  --num-inference-steps 16 `
+  --num-variants 2 `
+  --generation-batch-size 4 `
+  --num-inference-steps 20 `
   --guidance-scale 8.5 `
   --strength 0.82 `
   --controlnet-scale 0.75 `
@@ -131,7 +132,7 @@ python -m pokemon_ai.train `
   --cache-dir cache/pairs-256 `
   --run-dir runs/student-256 `
   --image-size 256 `
-  --batch-size 4 `
+  --batch-size 16 `
   --save-every-steps 2
 ```
 
