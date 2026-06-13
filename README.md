@@ -134,6 +134,40 @@ The prompt is biased toward a non-human collectible creature that keeps the pers
 
 The training loop caches resized tensors and saves checkpoints frequently.
 
+Recommended next path: train the few-step latent student. This is better suited to the human-to-creature geometry change than the one-pass pixel student.
+
+```powershell
+python -m pokemon_ai.train_latent `
+  --input-dir data/pairs-pokemon-sd15-v3/input `
+  --target-dir data/pairs-pokemon-sd15-v3/target `
+  --pair-name-regex "_v000$" `
+  --image-cache-dir cache/pairs-pokemon-sd15-v3-256-latent-images `
+  --latent-cache-dir cache/pairs-pokemon-sd15-v3-256-latents `
+  --run-dir runs/latent-student-pokemon-sd15-v3-256 `
+  --image-size 256 `
+  --batch-size 32 `
+  --latent-cache-batch-size 16 `
+  --epochs 80 `
+  --base-channels 128 `
+  --sample-steps 8 `
+  --train-step-choices 4,8,12 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Latent inference:
+
+```powershell
+python -m pokemon_ai.infer_latent `
+  --checkpoint runs/latent-student-pokemon-sd15-v3-256/checkpoints/latest.pt `
+  --input path/to/human.png `
+  --output out/latent-pokemon-human.png `
+  --sample-steps 8
+```
+
+Older one-pass pixel student:
+
 ```powershell
 python -m pokemon_ai.train `
   --input-dir data/pairs/input `
