@@ -99,7 +99,7 @@ def main() -> None:
     if not metrics_path.exists() or start_step == 0:
         with metrics_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(["step", "epoch", "loss_g", "loss_d", "loss_l1", "loss_perc", "loss_gan"])
+            writer.writerow(["epoch", "step", "loss_g", "loss_d", "loss_l1", "loss_perc", "loss_gan"])
 
     recon_loss = CharbonnierLoss()
     gan_loss = nn.MSELoss()
@@ -108,6 +108,14 @@ def main() -> None:
     step = start_step
     for epoch in range(start_epoch, config.epochs):
         progress = tqdm(loader, desc=f"epoch {epoch + 1}/{config.epochs}")
+        epoch_sums = {
+            "loss_g": 0.0,
+            "loss_d": 0.0,
+            "loss_l1": 0.0,
+            "loss_perc": 0.0,
+            "loss_gan": 0.0,
+        }
+        epoch_batches = 0
         for batch in progress:
             source = batch["input"].to(device, non_blocking=True)
             target = batch["target"].to(device, non_blocking=True)
@@ -154,6 +162,12 @@ def main() -> None:
             scaler.update()
 
             step += 1
+            epoch_batches += 1
+            epoch_sums["loss_g"] += loss_g.item()
+            epoch_sums["loss_d"] += loss_d.item()
+            epoch_sums["loss_l1"] += loss_l1.item()
+            epoch_sums["loss_perc"] += loss_perc.item()
+            epoch_sums["loss_gan"] += loss_gan.item()
             progress.set_postfix(
                 {
                     "g": f"{loss_g.item():.3f}",
@@ -163,19 +177,6 @@ def main() -> None:
                     "gan": f"{loss_gan.item():.3f}",
                 }
             )
-            with metrics_path.open("a", newline="", encoding="utf-8") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(
-                    [
-                        step,
-                        epoch + 1,
-                        f"{loss_g.item():.6f}",
-                        f"{loss_d.item():.6f}",
-                        f"{loss_l1.item():.6f}",
-                        f"{loss_perc.item():.6f}",
-                        f"{loss_gan.item():.6f}",
-                    ]
-                )
 
             if step % config.sample_every_steps == 0:
                 generator.eval()
@@ -204,6 +205,20 @@ def main() -> None:
                 )
 
             if config.max_steps is not None and step >= config.max_steps:
+                if epoch_batches > 0:
+                    with metrics_path.open("a", newline="", encoding="utf-8") as handle:
+                        writer = csv.writer(handle)
+                        writer.writerow(
+                            [
+                                epoch + 1,
+                                step,
+                                f"{epoch_sums['loss_g'] / epoch_batches:.6f}",
+                                f"{epoch_sums['loss_d'] / epoch_batches:.6f}",
+                                f"{epoch_sums['loss_l1'] / epoch_batches:.6f}",
+                                f"{epoch_sums['loss_perc'] / epoch_batches:.6f}",
+                                f"{epoch_sums['loss_gan'] / epoch_batches:.6f}",
+                            ]
+                        )
                 save_checkpoint(
                     checkpoint_dir / "latest.pt",
                     generator=generator,
@@ -216,6 +231,21 @@ def main() -> None:
                     config=config.to_dict(),
                 )
                 return
+
+        if epoch_batches > 0:
+            with metrics_path.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    [
+                        epoch + 1,
+                        step,
+                        f"{epoch_sums['loss_g'] / epoch_batches:.6f}",
+                        f"{epoch_sums['loss_d'] / epoch_batches:.6f}",
+                        f"{epoch_sums['loss_l1'] / epoch_batches:.6f}",
+                        f"{epoch_sums['loss_perc'] / epoch_batches:.6f}",
+                        f"{epoch_sums['loss_gan'] / epoch_batches:.6f}",
+                    ]
+                )
 
         save_checkpoint(
             checkpoint_dir / f"epoch-{epoch + 1:04d}.pt",
