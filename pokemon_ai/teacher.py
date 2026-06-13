@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -31,7 +32,7 @@ DEFAULT_NEGATIVE_PROMPT = (
 
 @dataclass
 class TeacherConfig:
-    hf_dataset: str = "detection-datasets/coco"
+    hf_dataset: str = "detection-datasets/fashionpedia"
     hf_config: str = ""
     hf_split: str = "train"
     hf_image_column: str = "image"
@@ -39,7 +40,9 @@ class TeacherConfig:
     hf_caption_filter: str = ""
     hf_objects_column: str = "objects"
     hf_object_category_column: str = "category"
-    hf_required_categories: str = "0"
+    hf_required_categories: str = ""
+    hf_required_category_min_count: int = 0
+    hf_required_category_max_count: int = -1
     hf_streaming: bool = False
     max_source_images: int = 200
     raw_dir: str = ""
@@ -56,9 +59,10 @@ class TeacherConfig:
     pose_detector_repo: str = "lllyasviel/ControlNet"
     prompt: str = DEFAULT_PROMPT
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
-    image_size: int = 1024
+    image_size: int = 768
+    pose_detect_resolution: int = 384
     num_variants: int = 1
-    num_inference_steps: int = 24
+    num_inference_steps: int = 12
     guidance_scale: float = 6.5
     strength: float = 0.82
     controlnet_scale: float = 0.7
@@ -71,6 +75,7 @@ class TeacherConfig:
     enable_xformers: bool = False
     cpu_offload: bool = False
     validate_hf_refs: bool = True
+    diffusers_progress: bool = False
 
 
 @dataclass
@@ -150,7 +155,14 @@ def caption_matches(row: dict[str, Any], column: str, filters: list[str]) -> boo
     return any(item in text for item in filters)
 
 
-def object_categories_match(row: dict[str, Any], objects_column: str, category_column: str, required: set[int]) -> bool:
+def object_categories_match(
+    row: dict[str, Any],
+    objects_column: str,
+    category_column: str,
+    required: set[int],
+    min_count: int,
+    max_count: int,
+) -> bool:
     if not required or not objects_column:
         return True
     objects = row.get(objects_column)
@@ -159,7 +171,12 @@ def object_categories_match(row: dict[str, Any], objects_column: str, category_c
     categories = objects.get(category_column) if isinstance(objects, dict) else None
     if categories is None:
         return False
-    return any(int(category) in required for category in categories)
+    count = sum(1 for category in categories if int(category) in required)
+    if count < min_count:
+        return False
+    if max_count >= 0 and count > max_count:
+        return False
+    return True
 
 
 def pil_from_hf_value(value: Any) -> Image.Image:
@@ -214,6 +231,8 @@ def iter_hf_sources(config: TeacherConfig, cache_dir: Path) -> Iterator[SourceIm
             config.hf_objects_column,
             config.hf_object_category_column,
             required_categories,
+            config.hf_required_category_min_count,
+            config.hf_required_category_max_count,
         ):
             continue
         try:
@@ -325,6 +344,8 @@ def build_pipeline(config: TeacherConfig):
     if config.enable_xformers:
         pipe.enable_xformers_memory_efficient_attention()
 
+    pipe.set_progress_bar_config(disable=not config.diffusers_progress)
+
     try:
         pipe.enable_vae_slicing()
         pipe.enable_vae_tiling()
@@ -340,13 +361,23 @@ def cached_pose(
     image: Image.Image,
     cache_key: str,
     cache_dir: Path,
+    detect_resolution: int,
 ) -> Image.Image:
     pose_dir = cache_dir / "poses"
     pose_dir.mkdir(parents=True, exist_ok=True)
     pose_path = pose_dir / f"{cache_key}.png"
     if pose_path.exists():
         return Image.open(pose_path).convert("RGB")
-    pose = pose_detector(image)
+    try:
+        pose = pose_detector(
+            image,
+            detect_resolution=detect_resolution,
+            image_resolution=max(image.size),
+            include_hand=False,
+            include_face=False,
+        )
+    except TypeError:
+        pose = pose_detector(image)
     pose = pose.convert("RGB").resize(image.size, Image.Resampling.BICUBIC)
     pose.save(pose_path)
     return pose
@@ -360,6 +391,9 @@ def output_name(source_name: str, variant: int, num_variants: int) -> str:
 
 def main() -> None:
     config = TeacherConfig(**vars(parse_args()))
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     pair_input_dir = Path(config.pair_input_dir)
     pair_target_dir = Path(config.pair_target_dir)
     cache_dir = Path(config.cache_dir)
@@ -393,9 +427,18 @@ def main() -> None:
     processed = 0
     source_count = 0
     for image_index, source in enumerate(tqdm(iter_sources(config, cache_dir), total=config.max_source_images, desc="teacher pairs")):
+        pair_start = time.perf_counter()
         source_count += 1
         source_image = source.image
-        pose_image = cached_pose(pose_detector, source_image, source.cache_key, cache_dir)
+        pose_start = time.perf_counter()
+        pose_image = cached_pose(
+            pose_detector,
+            source_image,
+            source.cache_key,
+            cache_dir,
+            config.pose_detect_resolution,
+        )
+        pose_seconds = time.perf_counter() - pose_start
 
         for variant in range(config.num_variants):
             pair_name = output_name(source.name, variant, config.num_variants)
@@ -415,6 +458,7 @@ def main() -> None:
             generator = torch.Generator(device=config.device).manual_seed(
                 config.seed + image_index * 1009 + variant
             )
+            diffusion_start = time.perf_counter()
             result = pipe(
                 prompt=config.prompt,
                 negative_prompt=config.negative_prompt,
@@ -427,9 +471,12 @@ def main() -> None:
                 controlnet_conditioning_scale=config.controlnet_scale,
                 generator=generator,
             ).images[0]
+            diffusion_seconds = time.perf_counter() - diffusion_start
 
+            save_start = time.perf_counter()
             source_image.save(input_path)
             result.save(target_path)
+            save_seconds = time.perf_counter() - save_start
             append_state(
                 state_path,
                 {
@@ -440,6 +487,10 @@ def main() -> None:
                     "source_cache": str(cache_dir / "sources" / f"{source.cache_key}.png"),
                     "pose": str(cache_dir / "poses" / f"{source.cache_key}.png"),
                     "variant": variant,
+                    "seconds_total": round(time.perf_counter() - pair_start, 3),
+                    "seconds_pose": round(pose_seconds, 3),
+                    "seconds_diffusion": round(diffusion_seconds, 3),
+                    "seconds_save": round(save_seconds, 3),
                     "status": "done",
                 },
             )

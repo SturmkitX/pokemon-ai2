@@ -39,27 +39,44 @@ That preflight checks the default dataset, model repos, dataset split, and IP-Ad
 
 ```powershell
 python -m pokemon_ai.teacher `
-  --hf-dataset detection-datasets/coco `
+  --hf-dataset detection-datasets/fashionpedia `
   --hf-split train `
   --hf-image-column image `
   --hf-objects-column objects `
   --hf-object-category-column category `
-  --hf-required-categories 0 `
+  --hf-required-categories "" `
   --max-source-images 200 `
   --pair-input-dir data/pairs/input `
   --pair-target-dir data/pairs/target `
   --cache-dir cache/teacher-sdxl `
   --state-path runs/teacher-sdxl/state.jsonl `
-  --image-size 1024 `
+  --image-size 768 `
+  --pose-detect-resolution 384 `
   --num-variants 1 `
-  --num-inference-steps 24 `
+  --num-inference-steps 12 `
   --strength 0.82 `
   --controlnet-scale 0.7 `
   --ip-adapter-scale 0.45 `
   --save-every 2
 ```
 
-`detection-datasets/coco` is the default because it is script-free/parquet on Hugging Face and has object annotations. Category `0` is COCO's `person` class, so the script filters toward images that actually contain people.
+Diffusers' inner denoising progress bars are disabled by default so the outer `teacher pairs` bar is readable. Add `--diffusers-progress` if you want to see each denoising step. Per-pair timing is written into `runs/teacher-sdxl/state.jsonl`.
+
+`detection-datasets/fashionpedia` is the default because it is script-free/parquet on Hugging Face and is fashion/person-centered instead of general scene photography. That gives better single-subject framing and stronger clothing/accessory signals than COCO.
+
+COCO is still usable as a fallback if you want strict person-count filtering:
+
+```powershell
+python -m pokemon_ai.teacher `
+  --hf-dataset detection-datasets/coco `
+  --hf-split train `
+  --hf-image-column image `
+  --hf-objects-column objects `
+  --hf-object-category-column category `
+  --hf-required-categories 0 `
+  --hf-required-category-min-count 1 `
+  --hf-required-category-max-count 1
+```
 
 For a dataset without captions, pass an empty caption filter:
 
