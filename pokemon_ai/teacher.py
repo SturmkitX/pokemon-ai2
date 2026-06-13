@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import torch
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 from tqdm import tqdm
 
 from .dataset import VALID_EXTS
@@ -19,13 +19,15 @@ from .hf_validate import HfValidationTarget, validate_hf_references
 DEFAULT_PROMPT = (
     "a pokemon creature, non-human monster, same pose, matching expression, "
     "wearing simplified clothes and accessories from input, same clothing colors, "
-    "cute creature design, clean game art"
+    "cute creature design, finished clean game art, crisp outlines, sharp edges, "
+    "complete polished character concept"
 )
 
 DEFAULT_NEGATIVE_PROMPT = (
     "human, humanoid, realistic person, person with animal ears, person with horns, cosplay, "
     "human face, human skin texture, human body, tail attached to a person, horns on a person, "
-    "ordinary portrait, photorealistic, scary, horror, low quality, blurry, text, watermark"
+    "ordinary portrait, photorealistic, scary, horror, low quality, blurry, soft edges, "
+    "unfinished, incomplete, missing outline, sketch, text, watermark"
 )
 
 
@@ -64,12 +66,16 @@ class TeacherConfig:
     image_size: int = 512
     pose_detect_resolution: int = 384
     num_variants: int = 1
-    num_inference_steps: int = 10
-    guidance_scale: float = 8.0
+    num_inference_steps: int = 16
+    guidance_scale: float = 8.5
     strength: float = 0.82
-    controlnet_scale: float = 0.7
+    controlnet_scale: float = 0.75
     ip_adapter_scale: float = 0.45
     scheduler: str = "unipc"
+    sharpen_outputs: bool = True
+    sharpen_radius: float = 1.0
+    sharpen_percent: int = 125
+    sharpen_threshold: int = 3
     seed: int = 1337
     save_every: int = 2
     torch_dtype: str = "float16"
@@ -421,6 +427,18 @@ def output_name(source_name: str, variant: int, num_variants: int) -> str:
     return f"{source_name}_v{variant:03d}"
 
 
+def postprocess_target(image: Image.Image, config: TeacherConfig) -> Image.Image:
+    if not config.sharpen_outputs:
+        return image
+    return image.filter(
+        ImageFilter.UnsharpMask(
+            radius=config.sharpen_radius,
+            percent=config.sharpen_percent,
+            threshold=config.sharpen_threshold,
+        )
+    )
+
+
 def main() -> None:
     config = TeacherConfig(**vars(parse_args()))
     if torch.cuda.is_available():
@@ -503,6 +521,7 @@ def main() -> None:
                 controlnet_conditioning_scale=config.controlnet_scale,
                 generator=generator,
             ).images[0]
+            result = postprocess_target(result, config)
             diffusion_seconds = time.perf_counter() - diffusion_start
 
             save_start = time.perf_counter()

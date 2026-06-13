@@ -61,11 +61,12 @@ python -m pokemon_ai.teacher `
   --image-size 512 `
   --pose-detect-resolution 384 `
   --num-variants 1 `
-  --num-inference-steps 10 `
-  --guidance-scale 8.0 `
+  --num-inference-steps 16 `
+  --guidance-scale 8.5 `
   --strength 0.82 `
-  --controlnet-scale 0.7 `
+  --controlnet-scale 0.75 `
   --ip-adapter-scale 0.45 `
+  --sharpen-outputs `
   --save-every 2
 ```
 
