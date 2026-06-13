@@ -33,12 +33,15 @@ DEFAULT_NEGATIVE_PROMPT = (
 
 @dataclass
 class TeacherConfig:
-    hf_dataset: str = "nlphuji/flickr30k"
+    hf_dataset: str = "detection-datasets/coco"
     hf_config: str = ""
-    hf_split: str = "test"
+    hf_split: str = "train"
     hf_image_column: str = "image"
-    hf_caption_column: str = "caption"
-    hf_caption_filter: str = "person,people,man,woman,boy,girl,wearing,standing,sitting"
+    hf_caption_column: str = ""
+    hf_caption_filter: str = ""
+    hf_objects_column: str = "objects"
+    hf_object_category_column: str = "category"
+    hf_required_categories: str = "0"
     hf_streaming: bool = False
     max_source_images: int = 200
     raw_dir: str = ""
@@ -148,6 +151,18 @@ def caption_matches(row: dict[str, Any], column: str, filters: list[str]) -> boo
     return any(item in text for item in filters)
 
 
+def object_categories_match(row: dict[str, Any], objects_column: str, category_column: str, required: set[int]) -> bool:
+    if not required or not objects_column:
+        return True
+    objects = row.get(objects_column)
+    if not objects:
+        return False
+    categories = objects.get(category_column) if isinstance(objects, dict) else None
+    if categories is None:
+        return False
+    return any(int(category) in required for category in categories)
+
+
 def pil_from_hf_value(value: Any) -> Image.Image:
     if isinstance(value, Image.Image):
         return value.convert("RGB")
@@ -185,12 +200,22 @@ def iter_hf_sources(config: TeacherConfig, cache_dir: Path) -> Iterator[SourceIm
         dataset_args.append(config.hf_config)
     dataset = load_dataset(*dataset_args, split=config.hf_split, streaming=config.hf_streaming)
     filters = [item.strip().lower() for item in config.hf_caption_filter.split(",") if item.strip()]
+    required_categories = {
+        int(item.strip()) for item in config.hf_required_categories.split(",") if item.strip()
+    }
 
     count = 0
     for row_index, row in enumerate(dataset):
         if count >= config.max_source_images:
             break
         if not caption_matches(row, config.hf_caption_column, filters):
+            continue
+        if not object_categories_match(
+            row,
+            config.hf_objects_column,
+            config.hf_object_category_column,
+            required_categories,
+        ):
             continue
         try:
             image = pil_from_hf_value(row[config.hf_image_column])
@@ -350,6 +375,7 @@ def main() -> None:
                 hf_dataset=config.hf_dataset,
                 hf_config=config.hf_config,
                 hf_split=config.hf_split,
+                hf_streaming=config.hf_streaming,
                 base_model=config.base_model,
                 controlnet_model=config.controlnet_model,
                 ip_adapter_repo=config.ip_adapter_repo,

@@ -39,11 +39,12 @@ That preflight checks the default dataset, model repos, dataset split, and IP-Ad
 
 ```powershell
 python -m pokemon_ai.teacher `
-  --hf-dataset nlphuji/flickr30k `
-  --hf-split test `
+  --hf-dataset detection-datasets/coco `
+  --hf-split train `
   --hf-image-column image `
-  --hf-caption-column caption `
-  --hf-caption-filter "person,people,man,woman,boy,girl,wearing,standing,sitting" `
+  --hf-objects-column objects `
+  --hf-object-category-column category `
+  --hf-required-categories 0 `
   --max-source-images 200 `
   --pair-input-dir data/pairs/input `
   --pair-target-dir data/pairs/target `
@@ -58,7 +59,7 @@ python -m pokemon_ai.teacher `
   --save-every 2
 ```
 
-`nlphuji/flickr30k` is the default because it gives ordinary real-world images and captions, which lets the script filter toward images likely to contain people. You can replace it with any Hugging Face dataset that has an image column.
+`detection-datasets/coco` is the default because it is script-free/parquet on Hugging Face and has object annotations. Category `0` is COCO's `person` class, so the script filters toward images that actually contain people.
 
 For a dataset without captions, pass an empty caption filter:
 
@@ -69,6 +70,8 @@ python -m pokemon_ai.teacher `
   --hf-image-column image `
   --hf-caption-column "" `
   --hf-caption-filter "" `
+  --hf-objects-column "" `
+  --hf-required-categories "" `
   --max-source-images 500
 ```
 

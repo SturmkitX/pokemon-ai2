@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
         "hf_dataset",
         "hf_config",
         "hf_split",
+        "hf_streaming",
         "base_model",
         "controlnet_model",
         "ip_adapter_repo",
@@ -21,10 +22,18 @@ def parse_args() -> argparse.Namespace:
         "pose_detector_repo",
     ]
     for field_name in fields:
-        parser.add_argument(
-            "--" + field_name.replace("_", "-"),
-            default=getattr(defaults, field_name),
-        )
+        default = getattr(defaults, field_name)
+        if isinstance(default, bool):
+            parser.add_argument(
+                "--" + field_name.replace("_", "-"),
+                action=argparse.BooleanOptionalAction,
+                default=default,
+            )
+        else:
+            parser.add_argument(
+                "--" + field_name.replace("_", "-"),
+                default=default,
+            )
     return parser.parse_args()
 
 
