@@ -116,6 +116,7 @@ def sample_latents(
     alpha_bars: torch.Tensor,
     num_steps: int,
     seed: int,
+    guidance_scale: float,
     device: torch.device,
 ) -> torch.Tensor:
     generator = torch.Generator(device=device).manual_seed(seed)
@@ -123,7 +124,12 @@ def sample_latents(
     timesteps = make_inference_timesteps(alpha_bars.numel(), num_steps, device)
     for index, timestep in enumerate(timesteps):
         t = torch.full((shape[0],), int(timestep.item()), device=device, dtype=torch.long)
-        pred_noise = model(latent, source_latent, t)
+        if guidance_scale == 1.0:
+            pred_noise = model(latent, source_latent, t)
+        else:
+            pred_uncond = model(latent, torch.zeros_like(source_latent), t)
+            pred_cond = model(latent, source_latent, t)
+            pred_noise = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
         a = alpha_bars[timestep].view(1, 1, 1, 1)
         x0 = (latent - (1.0 - a).sqrt() * pred_noise) / a.sqrt()
         if index == len(timesteps) - 1:

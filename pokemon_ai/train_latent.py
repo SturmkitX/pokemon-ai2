@@ -43,7 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-channels", type=int, default=128)
     parser.add_argument("--num-train-timesteps", type=int, default=1000)
     parser.add_argument("--sample-steps", type=int, default=8)
+    parser.add_argument("--sample-guidance-scale", type=float, default=1.5)
     parser.add_argument("--train-step-choices", default="4,8,12")
+    parser.add_argument("--condition-drop-prob", type=float, default=0.1)
     parser.add_argument("--save-every-epochs", type=int, default=5)
     parser.add_argument("--sample-every-epochs", type=int, default=2)
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
@@ -80,6 +82,7 @@ def save_latent_samples(
     batch: dict[str, torch.Tensor],
     alpha_bars: torch.Tensor,
     sample_steps: int,
+    guidance_scale: float,
     seed: int,
     device: torch.device,
 ) -> None:
@@ -94,6 +97,7 @@ def save_latent_samples(
         alpha_bars=alpha_bars,
         num_steps=sample_steps,
         seed=seed,
+        guidance_scale=guidance_scale,
         device=device,
     )
     source = decode_latents(vae, source_latent).cpu()
@@ -170,6 +174,9 @@ def main() -> None:
         for batch in progress:
             source = batch["source"].to(device, dtype=torch.float32, non_blocking=True)
             target = batch["target"].to(device, dtype=torch.float32, non_blocking=True)
+            if args.condition_drop_prob > 0:
+                keep = (torch.rand(source.shape[0], device=device) >= args.condition_drop_prob).float()
+                source = source * keep[:, None, None, None]
             noise = torch.randn_like(target)
             pool_indices = torch.randint(0, timestep_pool.numel(), (target.shape[0],), device=device)
             timesteps = timestep_pool[pool_indices]
@@ -202,6 +209,7 @@ def main() -> None:
                 alpha_bars=alpha_bars,
                 sample_steps=args.sample_steps,
                 seed=args.seed + epoch,
+                guidance_scale=args.sample_guidance_scale,
                 device=device,
             )
 
