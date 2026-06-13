@@ -14,7 +14,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .config import TrainConfig, save_config
 from .dataset import PairedImageDataset
 from .losses import CharbonnierLoss, PerceptualLoss
-from .model import PatchDiscriminator, StylizerUNet
+from .model import PatchDiscriminator, ResNetStylizer, StylizerUNet
 from .utils import save_sample_grid, seed_everything
 
 
@@ -76,7 +76,12 @@ def main() -> None:
         drop_last=True,
     )
 
-    generator = StylizerUNet(config.base_channels).to(device)
+    if config.generator_arch == "unet":
+        generator = StylizerUNet(config.base_channels).to(device)
+    elif config.generator_arch == "resnet":
+        generator = ResNetStylizer(config.base_channels, config.res_blocks).to(device)
+    else:
+        raise ValueError(f"Unsupported generator architecture: {config.generator_arch}")
     discriminator = PatchDiscriminator(config.base_channels).to(device)
     optimizer_g = torch.optim.AdamW(generator.parameters(), lr=config.lr_g, betas=(config.beta1, config.beta2))
     optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=config.lr_d, betas=(config.beta1, config.beta2))

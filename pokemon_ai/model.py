@@ -91,6 +91,41 @@ class StylizerUNet(nn.Module):
         return self.out(x)
 
 
+class ResNetStylizer(nn.Module):
+    """Image translator without U-Net skips, better when geometry/style must change."""
+
+    def __init__(self, base_channels: int = 64, num_blocks: int = 8) -> None:
+        super().__init__()
+        c = base_channels
+        self.net = nn.Sequential(
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(3, c, 7),
+            nn.InstanceNorm2d(c, affine=True),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(c, c * 2, 3, stride=2, padding=1),
+            nn.InstanceNorm2d(c * 2, affine=True),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(c * 2, c * 4, 3, stride=2, padding=1),
+            nn.InstanceNorm2d(c * 4, affine=True),
+            nn.SiLU(inplace=True),
+            *[ResBlock(c * 4) for _ in range(num_blocks)],
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(c * 4, c * 2, 3, padding=1),
+            nn.InstanceNorm2d(c * 2, affine=True),
+            nn.SiLU(inplace=True),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(c * 2, c, 3, padding=1),
+            nn.InstanceNorm2d(c, affine=True),
+            nn.SiLU(inplace=True),
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(c, 3, 7),
+            nn.Tanh(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 class PatchDiscriminator(nn.Module):
     def __init__(self, base_channels: int = 48) -> None:
         super().__init__()

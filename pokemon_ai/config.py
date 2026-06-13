@@ -21,6 +21,8 @@ class TrainConfig:
     beta1: float = 0.5
     beta2: float = 0.999
     base_channels: int = 48
+    generator_arch: str = "resnet"
+    res_blocks: int = 8
     lambda_l1: float = 40.0
     lambda_perceptual: float = 4.0
     lambda_gan: float = 1.0

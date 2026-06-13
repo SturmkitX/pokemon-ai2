@@ -10,7 +10,7 @@ from torchvision.transforms.functional import to_pil_image
 
 from .checkpoint import load_checkpoint
 from .config import TrainConfig
-from .model import StylizerUNet
+from .model import ResNetStylizer, StylizerUNet
 from .utils import denormalize
 
 
@@ -31,7 +31,12 @@ def main() -> None:
     image_size = args.image_size or config.image_size
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
 
-    model = StylizerUNet(config.base_channels).to(device)
+    if config.generator_arch == "unet":
+        model = StylizerUNet(config.base_channels).to(device)
+    elif config.generator_arch == "resnet":
+        model = ResNetStylizer(config.base_channels, config.res_blocks).to(device)
+    else:
+        raise ValueError(f"Unsupported generator architecture: {config.generator_arch}")
     model.load_state_dict(checkpoint["generator"])
     model.eval()
 
