@@ -151,6 +151,8 @@ def main() -> None:
                     "g": f"{loss_g.item():.3f}",
                     "d": f"{loss_d.item():.3f}",
                     "l1": f"{loss_l1.item():.3f}",
+                    "perc": f"{loss_perc.item():.3f}",
+                    "gan": f"{loss_gan.item():.3f}",
                 }
             )
 
