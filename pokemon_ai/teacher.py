@@ -20,14 +20,16 @@ DEFAULT_PROMPT = (
     "a pokemon creature, non-human monster, same pose, matching expression, "
     "wearing simplified clothes and accessories from input, same clothing colors, "
     "cute creature design, finished clean game art, crisp outlines, sharp edges, "
-    "complete polished character concept"
+    "clean black contour linework, smooth cel shading, solid color regions, "
+    "complete polished character concept, high quality creature sprite art"
 )
 
 DEFAULT_NEGATIVE_PROMPT = (
     "human, humanoid, realistic person, person with animal ears, person with horns, cosplay, "
     "human face, human skin texture, human body, tail attached to a person, horns on a person, "
     "ordinary portrait, photorealistic, scary, horror, low quality, blurry, soft edges, "
-    "unfinished, incomplete, missing outline, sketch, text, watermark"
+    "unfinished, incomplete, missing outline, sketch, messy linework, jagged contours, "
+    "muddy shading, rough coloring, noisy texture, text, watermark"
 )
 
 
@@ -72,7 +74,12 @@ class TeacherConfig:
     strength: float = 0.82
     controlnet_scale: float = 0.75
     ip_adapter_scale: float = 0.45
-    scheduler: str = "unipc"
+    scheduler: str = "dpm"
+    detail_pass: bool = False
+    detail_pass_steps: int = 8
+    detail_pass_strength: float = 0.28
+    detail_pass_guidance_scale: float = 8.5
+    detail_pass_controlnet_scale: float = 0.55
     sharpen_outputs: bool = True
     sharpen_radius: float = 1.0
     sharpen_percent: int = 125
@@ -481,6 +488,25 @@ def generate_batch(
         controlnet_conditioning_scale=config.controlnet_scale,
         generator=generators,
     ).images
+
+    if config.detail_pass:
+        detail_generators = [
+            torch.Generator(device=config.device).manual_seed(job.seed + 1_000_003)
+            for job in jobs
+        ]
+        results = pipe(
+            prompt=[config.prompt] * len(jobs),
+            negative_prompt=[config.negative_prompt] * len(jobs),
+            image=results,
+            control_image=[job.pose_image for job in jobs],
+            ip_adapter_image=[[job.source_image for job in jobs]],
+            num_inference_steps=config.detail_pass_steps,
+            guidance_scale=config.detail_pass_guidance_scale,
+            strength=config.detail_pass_strength,
+            controlnet_conditioning_scale=config.detail_pass_controlnet_scale,
+            generator=detail_generators,
+        ).images
+
     diffusion_seconds = time.perf_counter() - diffusion_start
     per_image_diffusion_seconds = diffusion_seconds / max(len(jobs), 1)
 

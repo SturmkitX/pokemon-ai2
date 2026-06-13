@@ -71,6 +71,15 @@ python -m pokemon_ai.teacher `
   --save-every 2
 ```
 
+For cleaner but slower targets, add a low-strength polish pass:
+
+```powershell
+  --detail-pass `
+  --detail-pass-steps 8 `
+  --detail-pass-strength 0.28 `
+  --detail-pass-controlnet-scale 0.55
+```
+
 Diffusers' inner denoising progress bars are disabled by default so the outer `teacher pairs` bar is readable. Add `--diffusers-progress` if you want to see each denoising step. Per-pair timing is written into `runs/teacher-pokemon-sd15/state.jsonl`.
 
 `detection-datasets/fashionpedia` is the default because it is script-free/parquet on Hugging Face and is fashion/person-centered instead of general scene photography. That gives better single-subject framing and stronger clothing/accessory signals than COCO.
