@@ -347,7 +347,7 @@ def cached_pose(
     if pose_path.exists():
         return Image.open(pose_path).convert("RGB")
     pose = pose_detector(image)
-    pose = pose.convert("RGB").resize((image_size, image_size), Image.Resampling.BICUBIC)
+    pose = pose.convert("RGB").resize(image.size, Image.Resampling.BICUBIC)
     pose.save(pose_path)
     return pose
 
