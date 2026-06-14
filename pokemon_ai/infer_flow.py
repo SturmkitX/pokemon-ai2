@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--sample-steps", type=int, default=8)
     parser.add_argument("--noise-strength", type=float, default=None)
+    parser.add_argument("--sampler", choices=["euler", "heun"], default="heun")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--device", default="")
     return parser.parse_args()
@@ -65,6 +66,7 @@ def main() -> None:
             source=source,
             steps=args.sample_steps,
             noise_strength=noise_strength,
+            sampler=args.sampler,
             seed=args.seed,
             device=device,
         )

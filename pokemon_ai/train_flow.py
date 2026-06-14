@@ -35,7 +35,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--base-channels", type=int, default=128)
     parser.add_argument("--noise-strength", type=float, default=0.65)
+    parser.add_argument("--endpoint-loss-weight", type=float, default=1.0)
     parser.add_argument("--sample-steps", type=int, default=8)
+    parser.add_argument("--sampler", choices=["euler", "heun"], default="heun")
     parser.add_argument("--condition-drop-prob", type=float, default=0.0)
     parser.add_argument("--save-every-epochs", type=int, default=5)
     parser.add_argument("--sample-every-epochs", type=int, default=2)
@@ -52,6 +54,7 @@ def sample_flow(
     source: torch.Tensor,
     steps: int,
     noise_strength: float,
+    sampler: str,
     seed: int,
     device: torch.device,
 ) -> torch.Tensor:
@@ -63,7 +66,14 @@ def sample_flow(
         t_float = torch.full((source.shape[0],), index / steps, device=device)
         t_embed = (t_float * 999).long()
         velocity = model(latent, source, t_embed)
-        latent = latent + dt * velocity
+        if sampler == "heun" and index < steps - 1:
+            proposal = latent + dt * velocity
+            next_t = torch.full((source.shape[0],), (index + 1) / steps, device=device)
+            next_embed = (next_t * 999).long()
+            next_velocity = model(proposal, source, next_embed)
+            latent = latent + 0.5 * dt * (velocity + next_velocity)
+        else:
+            latent = latent + dt * velocity
     return latent
 
 
@@ -76,6 +86,7 @@ def save_flow_samples(
     batch: dict[str, torch.Tensor],
     steps: int,
     noise_strength: float,
+    sampler: str,
     seed: int,
     device: torch.device,
 ) -> None:
@@ -88,6 +99,7 @@ def save_flow_samples(
         source=source,
         steps=steps,
         noise_strength=noise_strength,
+        sampler=sampler,
         seed=seed,
         device=device,
     )
@@ -175,7 +187,10 @@ def main() -> None:
 
             with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
                 pred = model(x_t, cond, time_embed)
-                loss = F.mse_loss(pred, velocity)
+                velocity_loss = F.mse_loss(pred, velocity)
+                pred_target = x_t + (1.0 - time[:, None, None, None]) * pred
+                endpoint_loss = F.mse_loss(pred_target, target)
+                loss = velocity_loss + args.endpoint_loss_weight * endpoint_loss
 
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -199,6 +214,7 @@ def main() -> None:
                 batch=sample_batch,
                 steps=args.sample_steps,
                 noise_strength=args.noise_strength,
+                sampler=args.sampler,
                 seed=args.seed + epoch,
                 device=device,
             )
