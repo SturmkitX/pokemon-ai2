@@ -136,6 +136,41 @@ The training loop caches resized tensors and saves checkpoints frequently.
 
 Recommended next path: train the few-step latent student. This is better suited to the human-to-creature geometry change than the one-pass pixel student.
 
+Best current path: conditional flow matching. It is designed for low step counts like `4`, `8`, and `12`.
+
+```powershell
+python -m pokemon_ai.train_flow `
+  --input-dir data/pairs-pokemon-sd15-v3/input `
+  --target-dir data/pairs-pokemon-sd15-v3/target `
+  --pair-name-regex "_v000$" `
+  --image-cache-dir cache/pairs-pokemon-sd15-v3-512-flow-images `
+  --latent-cache-dir cache/pairs-pokemon-sd15-v3-512-flow-latents `
+  --run-dir runs/flow-student-pokemon-sd15-v3-512 `
+  --image-size 512 `
+  --batch-size 16 `
+  --latent-cache-batch-size 8 `
+  --epochs 100 `
+  --base-channels 128 `
+  --noise-strength 0.65 `
+  --sample-steps 8 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Flow inference:
+
+```powershell
+python -m pokemon_ai.infer_flow `
+  --checkpoint runs/flow-student-pokemon-sd15-v3-512/checkpoints/latest.pt `
+  --input path/to/human.png `
+  --output out/flow-pokemon-human.png `
+  --sample-steps 8 `
+  --noise-strength 0.65
+```
+
+Previous latent DDPM path:
+
 ```powershell
 python -m pokemon_ai.train_latent `
   --input-dir data/pairs-pokemon-sd15-v3/input `
