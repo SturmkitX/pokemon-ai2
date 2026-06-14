@@ -134,6 +134,83 @@ The prompt is biased toward a non-human collectible creature that keeps the pers
 
 The training loop caches resized tensors and saves checkpoints frequently.
 
+From-scratch staged path: split the task into layout, edge, and refinement models.
+
+Train coarse Pokemon layout:
+
+```powershell
+python -m pokemon_ai.train_staged `
+  --stage layout `
+  --input-dir data/pairs-pokemon-sd15-v3/input `
+  --target-dir data/pairs-pokemon-sd15-v3/target `
+  --pair-name-regex "_v000$" `
+  --cache-dir cache/staged-images-512 `
+  --run-dir runs/staged-layout-512 `
+  --image-size 512 `
+  --batch-size 16 `
+  --epochs 60 `
+  --base-channels 64 `
+  --blur-factor 16 `
+  --lambda-l1 20 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Train target edge prediction:
+
+```powershell
+python -m pokemon_ai.train_staged `
+  --stage edge `
+  --input-dir data/pairs-pokemon-sd15-v3/input `
+  --target-dir data/pairs-pokemon-sd15-v3/target `
+  --pair-name-regex "_v000$" `
+  --cache-dir cache/staged-images-512 `
+  --run-dir runs/staged-edge-512 `
+  --image-size 512 `
+  --batch-size 16 `
+  --epochs 60 `
+  --base-channels 64 `
+  --blur-factor 16 `
+  --lambda-l1 20 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Train final refinement:
+
+```powershell
+python -m pokemon_ai.train_staged `
+  --stage refine `
+  --input-dir data/pairs-pokemon-sd15-v3/input `
+  --target-dir data/pairs-pokemon-sd15-v3/target `
+  --pair-name-regex "_v000$" `
+  --cache-dir cache/staged-images-512 `
+  --run-dir runs/staged-refine-512 `
+  --image-size 512 `
+  --batch-size 16 `
+  --epochs 80 `
+  --base-channels 64 `
+  --blur-factor 16 `
+  --lambda-l1 10 `
+  --lambda-perceptual 4 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Staged inference:
+
+```powershell
+python -m pokemon_ai.infer_staged `
+  --layout-checkpoint runs/staged-layout-512/checkpoints/latest.pt `
+  --edge-checkpoint runs/staged-edge-512/checkpoints/latest.pt `
+  --refine-checkpoint runs/staged-refine-512/checkpoints/latest.pt `
+  --input path/to/human.png `
+  --output out/staged-pokemon-human.png
+```
+
 Recommended next path: train the few-step latent student. This is better suited to the human-to-creature geometry change than the one-pass pixel student.
 
 Best current path: conditional flow matching. It is designed for low step counts like `4`, `8`, and `12`.
