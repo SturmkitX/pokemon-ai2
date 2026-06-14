@@ -136,6 +136,113 @@ The training loop caches resized tensors and saves checkpoints frequently.
 
 From-scratch staged path: split the task into layout, edge, and refinement models.
 
+Best compromise chain: make the teacher generate a rough Pokemon intermediate and a polished final target. Then train two small students on those real teacher stages.
+
+Generate chained teacher pairs:
+
+```powershell
+python -m pokemon_ai.teacher_chain `
+  --hf-dataset detection-datasets/fashionpedia `
+  --hf-split train `
+  --hf-image-column image `
+  --hf-objects-column objects `
+  --hf-object-category-column category `
+  --hf-required-categories "" `
+  --max-source-images 1000 `
+  --source-output-dir data/pairs-pokemon-chain-v1/source `
+  --rough-output-dir data/pairs-pokemon-chain-v1/rough `
+  --final-output-dir data/pairs-pokemon-chain-v1/final `
+  --cache-dir cache/teacher-pokemon-chain-v1 `
+  --state-path runs/teacher-pokemon-chain-v1/state.jsonl `
+  --model-family sd15 `
+  --base-model lambda/sd-pokemon-diffusers `
+  --controlnet-model lllyasviel/control_v11p_sd15_openpose `
+  --ip-adapter-subfolder models `
+  --ip-adapter-weight ip-adapter_sd15.safetensors `
+  --no-base-use-safetensors `
+  --no-vae-slicing `
+  --no-vae-tiling `
+  --image-size 512 `
+  --pose-detect-resolution 384 `
+  --num-variants 1 `
+  --scheduler dpm `
+  --save-every 10
+```
+
+Train rough-stage student:
+
+```powershell
+python -m pokemon_ai.train_chain `
+  --stage rough `
+  --source-dir data/pairs-pokemon-chain-v1/source `
+  --rough-dir data/pairs-pokemon-chain-v1/rough `
+  --final-dir data/pairs-pokemon-chain-v1/final `
+  --run-dir runs/chain-rough-512 `
+  --image-size 512 `
+  --batch-size 16 `
+  --epochs 80 `
+  --base-channels 64 `
+  --blur-factor 16 `
+  --lambda-l1 10 `
+  --lambda-perceptual 4 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Train refine-stage student:
+
+```powershell
+python -m pokemon_ai.train_chain `
+  --stage refine `
+  --source-dir data/pairs-pokemon-chain-v1/source `
+  --rough-dir data/pairs-pokemon-chain-v1/rough `
+  --final-dir data/pairs-pokemon-chain-v1/final `
+  --run-dir runs/chain-refine-512 `
+  --image-size 512 `
+  --batch-size 16 `
+  --epochs 80 `
+  --base-channels 64 `
+  --blur-factor 16 `
+  --lambda-l1 10 `
+  --lambda-perceptual 4 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Chain inference:
+
+```powershell
+python -m pokemon_ai.infer_chain `
+  --rough-checkpoint runs/chain-rough-512/checkpoints/latest.pt `
+  --refine-checkpoint runs/chain-refine-512/checkpoints/latest.pt `
+  --input path/to/human.png `
+  --output out/chain-pokemon-human.png
+```
+
+Materialize explicit stage chains from final teacher pairs:
+
+```powershell
+python -m pokemon_ai.prepare_stage_pairs `
+  --input-dir data/pairs-pokemon-strict-v4/input `
+  --target-dir data/pairs-pokemon-strict-v4/target `
+  --output-dir data/stage-pairs-pokemon-strict-v4 `
+  --cache-dir cache/prepare-stage-pairs-strict-v4 `
+  --image-size 512 `
+  --blur-factor 16
+```
+
+This writes inspectable chains:
+
+```text
+layout/input_rgb, layout/input_color, layout/input_edge -> layout/target
+edge/input_layout -> edge/target
+refine/input_layout + refine/input_edge -> refine/target
+chains/*.png
+tensors/*.pt
+```
+
 Train coarse Pokemon layout:
 
 ```powershell
