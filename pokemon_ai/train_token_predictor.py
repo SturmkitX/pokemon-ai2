@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=120)
+    parser.add_argument("--architecture", choices=["resnet", "unet"], default="resnet")
     parser.add_argument("--model-dim", type=int, default=384)
     parser.add_argument("--layers", type=int, default=10)
     parser.add_argument("--dropout", type=float, default=0.05)
@@ -254,6 +255,7 @@ def main() -> None:
         grid_size=grid_size,
         stage=args.stage,
         dropout=args.dropout,
+        architecture=args.architecture,
     )
     model = MaskedTokenPredictor(config).to(device)
     rough_condition_model = None

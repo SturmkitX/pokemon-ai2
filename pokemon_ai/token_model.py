@@ -24,6 +24,43 @@ class TokenResBlock(nn.Module):
         return x + h
 
 
+class TokenUNetCore(nn.Module):
+    def __init__(self, channels: int, layers: int, dropout: float = 0.0) -> None:
+        super().__init__()
+        stem_layers = max(1, layers // 4)
+        mid_layers = max(2, layers - stem_layers * 3)
+        self.enc1 = nn.Sequential(*[TokenResBlock(channels, dropout) for _ in range(stem_layers)])
+        self.down1 = nn.Conv2d(channels, channels, 4, stride=2, padding=1)
+        self.enc2 = nn.Sequential(*[TokenResBlock(channels, dropout) for _ in range(stem_layers)])
+        self.down2 = nn.Conv2d(channels, channels, 4, stride=2, padding=1)
+        self.mid = nn.Sequential(*[TokenResBlock(channels, dropout) for _ in range(mid_layers)])
+        self.up2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(channels, channels, 3, padding=1),
+        )
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(channels * 2, channels, 1),
+            *[TokenResBlock(channels, dropout) for _ in range(stem_layers)],
+        )
+        self.up1 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(channels, channels, 3, padding=1),
+        )
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(channels * 2, channels, 1),
+            *[TokenResBlock(channels, dropout) for _ in range(stem_layers)],
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        skip1 = self.enc1(x)
+        skip2 = self.enc2(self.down1(skip1))
+        h = self.mid(self.down2(skip2))
+        h = self.up2(h)
+        h = self.dec2(torch.cat([h, skip2], dim=1))
+        h = self.up1(h)
+        return self.dec1(torch.cat([h, skip1], dim=1))
+
+
 class ConditionEncoder(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, downsample_factor: int = 16) -> None:
         super().__init__()
@@ -55,6 +92,7 @@ class TokenPredictorConfig:
     grid_size: int = 32
     stage: str = "rough"
     dropout: float = 0.05
+    architecture: str = "resnet"
 
 
 class MaskedTokenPredictor(nn.Module):
@@ -70,7 +108,12 @@ class MaskedTokenPredictor(nn.Module):
             in_channels += config.token_dim
         self.input = nn.Conv2d(in_channels, config.model_dim, 1)
         self.position = nn.Parameter(torch.zeros(1, config.model_dim, config.grid_size, config.grid_size))
-        self.blocks = nn.Sequential(*[TokenResBlock(config.model_dim, config.dropout) for _ in range(config.layers)])
+        if config.architecture == "unet":
+            self.blocks = TokenUNetCore(config.model_dim, config.layers, config.dropout)
+        elif config.architecture == "resnet":
+            self.blocks = nn.Sequential(*[TokenResBlock(config.model_dim, config.dropout) for _ in range(config.layers)])
+        else:
+            raise ValueError(f"Unsupported token predictor architecture: {config.architecture}")
         self.out = nn.Sequential(
             nn.GroupNorm(8, config.model_dim),
             nn.SiLU(),
@@ -102,7 +145,9 @@ class MaskedTokenPredictor(nn.Module):
 
 
 def build_token_predictor_from_state(state: dict, device: torch.device | str = "cpu") -> MaskedTokenPredictor:
-    config = TokenPredictorConfig(**state["config"])
+    raw_config = dict(state["config"])
+    raw_config.setdefault("architecture", "resnet")
+    config = TokenPredictorConfig(**raw_config)
     model = MaskedTokenPredictor(config).to(device)
     model.load_state_dict(state["model"])
     return model
