@@ -221,6 +221,89 @@ python -m pokemon_ai.infer_chain `
   --output out/chain-pokemon-human.png
 ```
 
+## VQ Token Pipeline
+
+This is the recommended from-scratch path after the RGB, latent diffusion, and flow students proved too blurry. It trains a discrete Pokemon image tokenizer, then two masked token predictors:
+
+```text
+source color blur + source edge -> rough Pokemon tokens -> final Pokemon tokens -> VQ decoder
+```
+
+The first predictor does not receive raw source RGB, so it has less incentive to copy human photos. Inference defaults to `4` rough passes plus `4` refine passes; `2+2` is the fast 4-pass mode.
+
+Train the VQ tokenizer on cleaned rough/final teacher outputs:
+
+```powershell
+/venv/main/bin/python -m pokemon_ai.train_vq_tokenizer `
+  --rough-dir data/pairs-pokemon-chain-v2/rough `
+  --final-dir data/pairs-pokemon-chain-v2/final `
+  --run-dir runs/vq-tokenizer-chain-v2-clean `
+  --image-size 512 `
+  --batch-size 8 `
+  --epochs 150 `
+  --codebook-size 1024 `
+  --embedding-dim 256 `
+  --downsample-factor 16 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Train the rough token predictor:
+
+```powershell
+/venv/main/bin/python -m pokemon_ai.train_token_predictor `
+  --stage rough `
+  --source-dir data/pairs-pokemon-chain-v2/source `
+  --rough-dir data/pairs-pokemon-chain-v2/rough `
+  --final-dir data/pairs-pokemon-chain-v2/final `
+  --tokenizer-checkpoint runs/vq-tokenizer-chain-v2-clean/checkpoints/latest.pt `
+  --run-dir runs/token-rough-chain-v2-clean `
+  --image-size 512 `
+  --batch-size 8 `
+  --epochs 120 `
+  --mask-schedule cosine `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Train the refine token predictor:
+
+```powershell
+/venv/main/bin/python -m pokemon_ai.train_token_predictor `
+  --stage refine `
+  --source-dir data/pairs-pokemon-chain-v2/source `
+  --rough-dir data/pairs-pokemon-chain-v2/rough `
+  --final-dir data/pairs-pokemon-chain-v2/final `
+  --tokenizer-checkpoint runs/vq-tokenizer-chain-v2-clean/checkpoints/latest.pt `
+  --rough-predictor-checkpoint runs/token-rough-chain-v2-clean/checkpoints/latest.pt `
+  --run-dir runs/token-refine-chain-v2-clean `
+  --image-size 512 `
+  --batch-size 8 `
+  --epochs 120 `
+  --mask-schedule cosine `
+  --teacher-forcing-rough-prob 0.7 `
+  --save-every-epochs 5 `
+  --sample-every-epochs 2 `
+  --amp
+```
+
+Run low-step inference:
+
+```powershell
+/venv/main/bin/python -m pokemon_ai.infer_token_pipeline `
+  --tokenizer-checkpoint runs/vq-tokenizer-chain-v2-clean/checkpoints/latest.pt `
+  --rough-predictor-checkpoint runs/token-rough-chain-v2-clean/checkpoints/latest.pt `
+  --refine-predictor-checkpoint runs/token-refine-chain-v2-clean/checkpoints/latest.pt `
+  --input path/to/human.png `
+  --output out/token-pokemon.png `
+  --rough-steps 4 `
+  --refine-steps 4
+```
+
+Checkpoints are written every epoch to `checkpoints/latest.pt`; numbered checkpoints follow `--save-every-epochs`. Predictor training creates a persistent `token_cache/` in the run directory so rough/final VQ codes are encoded once and reused.
+
 Materialize explicit stage chains from final teacher pairs:
 
 ```powershell
