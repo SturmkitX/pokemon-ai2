@@ -88,6 +88,7 @@ class ChainTokenDataset(Dataset):
             "source": _load_rgb(source_path, self.image_size),
             "rough": _load_rgb(rough_path, self.image_size),
             "final": _load_rgb(final_path, self.image_size),
+            "source_tokens": token_state["source"].long() if "source" in token_state else token_state["rough"].long(),
             "rough_tokens": token_state["rough"].long(),
             "final_tokens": token_state["final"].long(),
             "name": source_path.stem,

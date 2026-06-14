@@ -17,13 +17,14 @@ from .vq_tokenizer import build_vq_tokenizer_from_state
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tokenizer-checkpoint", required=True)
-    parser.add_argument("--rough-predictor-checkpoint", required=True)
+    parser.add_argument("--rough-predictor-checkpoint", default="")
     parser.add_argument("--refine-predictor-checkpoint", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--image-size", type=int, default=512)
     parser.add_argument("--rough-steps", type=int, default=4)
     parser.add_argument("--refine-steps", type=int, default=4)
+    parser.add_argument("--rough-mode", choices=["predictor", "source-vq"], default="predictor")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=64)
     parser.add_argument("--blur-factor", type=int, default=16)
@@ -101,17 +102,27 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     tokenizer = build_vq_tokenizer_from_state(torch.load(args.tokenizer_checkpoint, map_location=device, weights_only=False), device).eval()
-    rough_state = torch.load(args.rough_predictor_checkpoint, map_location=device, weights_only=False)
-    rough_model = build_token_predictor_from_state(rough_state, device).eval()
-    refine_model = build_token_predictor_from_state(torch.load(args.refine_predictor_checkpoint, map_location=device, weights_only=False), device).eval()
+    rough_state = None
+    rough_model = None
+    if args.rough_mode == "predictor":
+        if not args.rough_predictor_checkpoint:
+            raise ValueError("--rough-predictor-checkpoint is required when --rough-mode predictor")
+        rough_state = torch.load(args.rough_predictor_checkpoint, map_location=device, weights_only=False)
+        rough_model = build_token_predictor_from_state(rough_state, device).eval()
+    refine_state = torch.load(args.refine_predictor_checkpoint, map_location=device, weights_only=False)
+    refine_model = build_token_predictor_from_state(refine_state, device).eval()
 
     source = load_image(args.input, args.image_size).to(device)
     condition_mode = args.condition_mode
     if condition_mode == "auto":
-        condition_mode = "rgb" if int(rough_state["config"].get("condition_channels", 4)) == 7 else "safe"
+        state_for_condition = rough_state if rough_state is not None else refine_state
+        condition_mode = "rgb" if int(state_for_condition["config"].get("condition_channels", 4)) == 7 else "safe"
     condition = token_source_condition(source, args.blur_factor, condition_mode)
     with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
-        rough_tokens = generate_tokens(rough_model, condition, args.rough_steps, temperature=args.temperature, top_k=args.top_k)
+        if args.rough_mode == "source-vq":
+            rough_tokens = tokenizer.encode_indices(source)
+        else:
+            rough_tokens = generate_tokens(rough_model, condition, args.rough_steps, temperature=args.temperature, top_k=args.top_k)
         final_tokens = generate_tokens(refine_model, condition, args.refine_steps, rough_tokens, temperature=args.temperature, top_k=args.top_k)
         output = tokenizer.decode_indices(final_tokens)
 

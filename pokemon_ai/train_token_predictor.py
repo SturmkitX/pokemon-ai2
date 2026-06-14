@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full-mask-prob", type=float, default=0.15)
     parser.add_argument("--foreground-loss-weight", type=float, default=4.0)
     parser.add_argument("--edge-loss-weight", type=float, default=2.0)
+    parser.add_argument("--refine-conditioning", choices=["teacher-rough", "source-vq"], default="teacher-rough")
     parser.add_argument("--teacher-forcing-rough-prob", type=float, default=0.7)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--save-every-epochs", type=int, default=5)
@@ -142,7 +143,19 @@ def build_token_cache(args: argparse.Namespace, tokenizer, device: torch.device)
     cache_dir = Path(args.token_cache_dir) if args.token_cache_dir else Path(args.run_dir) / "token_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     dataset = ChainDataset(args.source_dir, args.rough_dir, args.final_dir, args.image_size, args.pair_name_regex)
-    missing_indices = [i for i, item in enumerate(dataset.items) if not (cache_dir / f"{item[0].stem}.pt").exists()]
+    missing_indices = []
+    for i, item in enumerate(dataset.items):
+        cache_path = cache_dir / f"{item[0].stem}.pt"
+        if not cache_path.exists():
+            missing_indices.append(i)
+            continue
+        try:
+            cached = torch.load(cache_path, map_location="cpu", weights_only=True)
+        except Exception:
+            missing_indices.append(i)
+            continue
+        if "source" not in cached or "rough" not in cached or "final" not in cached:
+            missing_indices.append(i)
     if not missing_indices:
         return cache_dir
 
@@ -151,13 +164,15 @@ def build_token_cache(args: argparse.Namespace, tokenizer, device: torch.device)
     tokenizer.eval()
     progress = tqdm(loader, desc="token cache")
     for batch in progress:
+        source = batch["source"].to(device, non_blocking=True)
         rough = batch["rough"].to(device, non_blocking=True)
         final = batch["final"].to(device, non_blocking=True)
         with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
+            source_tokens = tokenizer.encode_indices(source).cpu()
             rough_tokens = tokenizer.encode_indices(rough).cpu()
             final_tokens = tokenizer.encode_indices(final).cpu()
-        for name, rough_item, final_item in zip(batch["name"], rough_tokens, final_tokens):
-            torch.save({"rough": rough_item, "final": final_item}, cache_dir / f"{name}.pt")
+        for name, source_item, rough_item, final_item in zip(batch["name"], source_tokens, rough_tokens, final_tokens):
+            torch.save({"source": source_item, "rough": rough_item, "final": final_item}, cache_dir / f"{name}.pt")
     return cache_dir
 
 
@@ -200,6 +215,7 @@ def save_samples(path: Path, model, tokenizer, batch, args, device: torch.device
     tokenizer.eval()
     source = batch["source"].to(device, non_blocking=True)
     cond = token_source_condition(source, args.blur_factor, args.condition_mode)
+    source_tokens = batch["source_tokens"].to(device, non_blocking=True)
     rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
     final_tokens = batch["final_tokens"].to(device, non_blocking=True)
     if args.stage == "rough":
@@ -208,7 +224,7 @@ def save_samples(path: Path, model, tokenizer, batch, args, device: torch.device
         target = batch["rough"].to(device, non_blocking=True)
         grid = torch.cat([source, pred, target], dim=0)
     else:
-        rough_for_cond = rough_tokens
+        rough_for_cond = source_tokens if args.refine_conditioning == "source-vq" else rough_tokens
         pred_tokens = generate_tokens(
             model,
             cond,
@@ -291,6 +307,7 @@ def main() -> None:
         for batch in progress:
             source = batch["source"].to(device, non_blocking=True)
             cond = token_source_condition(source, args.blur_factor, args.condition_mode)
+            source_tokens = batch["source_tokens"].to(device, non_blocking=True)
             rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
             final_tokens = batch["final_tokens"].to(device, non_blocking=True)
             target_tokens = rough_tokens if args.stage == "rough" else final_tokens
@@ -304,7 +321,7 @@ def main() -> None:
                 args.full_mask_prob,
             )
 
-            rough_condition_tokens = rough_tokens
+            rough_condition_tokens = source_tokens if args.refine_conditioning == "source-vq" else rough_tokens
             if args.stage == "refine" and rough_condition_model is not None and torch.rand((), device=device).item() > args.teacher_forcing_rough_prob:
                 with torch.no_grad():
                     rough_condition_tokens = generate_tokens(
