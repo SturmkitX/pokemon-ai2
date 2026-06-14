@@ -13,7 +13,7 @@ from tqdm import tqdm
 from .chain_dataset import ChainDataset
 from .token_dataset import ChainTokenDataset
 from .token_model import MaskedTokenPredictor, TokenPredictorConfig, build_token_predictor_from_state
-from .token_preprocess import token_source_condition
+from .token_preprocess import token_condition_channels, token_source_condition
 from .utils import denormalize, seed_everything
 from .vq_tokenizer import build_vq_tokenizer_from_state
 
@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--layers", type=int, default=10)
     parser.add_argument("--dropout", type=float, default=0.05)
     parser.add_argument("--blur-factor", type=int, default=16)
+    parser.add_argument("--condition-mode", choices=["safe", "rgb"], default="safe")
     parser.add_argument("--mask-schedule", choices=["cosine", "uniform"], default="cosine")
     parser.add_argument("--min-mask-ratio", type=float, default=0.05)
     parser.add_argument("--full-mask-prob", type=float, default=0.15)
@@ -198,7 +199,7 @@ def save_samples(path: Path, model, tokenizer, batch, args, device: torch.device
     model.eval()
     tokenizer.eval()
     source = batch["source"].to(device, non_blocking=True)
-    cond = token_source_condition(source, args.blur_factor)
+    cond = token_source_condition(source, args.blur_factor, args.condition_mode)
     rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
     final_tokens = batch["final_tokens"].to(device, non_blocking=True)
     if args.stage == "rough":
@@ -252,6 +253,7 @@ def main() -> None:
         model_dim=args.model_dim,
         layers=args.layers,
         downsample_factor=vq_config.downsample_factor,
+        condition_channels=token_condition_channels(args.condition_mode),
         grid_size=grid_size,
         stage=args.stage,
         dropout=args.dropout,
@@ -288,7 +290,7 @@ def main() -> None:
         progress = tqdm(loader, desc=f"{args.stage} token epoch {epoch + 1}/{args.epochs}")
         for batch in progress:
             source = batch["source"].to(device, non_blocking=True)
-            cond = token_source_condition(source, args.blur_factor)
+            cond = token_source_condition(source, args.blur_factor, args.condition_mode)
             rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
             final_tokens = batch["final_tokens"].to(device, non_blocking=True)
             target_tokens = rough_tokens if args.stage == "rough" else final_tokens

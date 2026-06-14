@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=64)
     parser.add_argument("--blur-factor", type=int, default=16)
+    parser.add_argument("--condition-mode", choices=["auto", "safe", "rgb"], default="auto")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
@@ -100,11 +101,15 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     tokenizer = build_vq_tokenizer_from_state(torch.load(args.tokenizer_checkpoint, map_location=device, weights_only=False), device).eval()
-    rough_model = build_token_predictor_from_state(torch.load(args.rough_predictor_checkpoint, map_location=device, weights_only=False), device).eval()
+    rough_state = torch.load(args.rough_predictor_checkpoint, map_location=device, weights_only=False)
+    rough_model = build_token_predictor_from_state(rough_state, device).eval()
     refine_model = build_token_predictor_from_state(torch.load(args.refine_predictor_checkpoint, map_location=device, weights_only=False), device).eval()
 
     source = load_image(args.input, args.image_size).to(device)
-    condition = token_source_condition(source, args.blur_factor)
+    condition_mode = args.condition_mode
+    if condition_mode == "auto":
+        condition_mode = "rgb" if int(rough_state["config"].get("condition_channels", 4)) == 7 else "safe"
+    condition = token_source_condition(source, args.blur_factor, condition_mode)
     with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
         rough_tokens = generate_tokens(rough_model, condition, args.rough_steps, temperature=args.temperature, top_k=args.top_k)
         final_tokens = generate_tokens(refine_model, condition, args.refine_steps, rough_tokens, temperature=args.temperature, top_k=args.top_k)
