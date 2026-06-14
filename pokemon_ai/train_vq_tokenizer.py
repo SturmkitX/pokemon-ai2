@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lambda-recon", type=float, default=1.0)
     parser.add_argument("--lambda-perceptual", type=float, default=0.2)
     parser.add_argument("--lambda-vq", type=float, default=1.0)
+    parser.add_argument("--skip-nonfinite", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-every-epochs", type=int, default=5)
     parser.add_argument("--sample-every-epochs", type=int, default=2)
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
@@ -110,10 +111,25 @@ def main() -> None:
             images = batch["image"].to(device, non_blocking=True)
             with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
                 out = model(images)
-                recon_loss = F.l1_loss(out["recon"], images)
-                perceptual_loss = perceptual(out["recon"], images) if perceptual is not None else torch.zeros((), device=device)
-                vq_loss = out["vq_loss"]
+
+            recon = out["recon"].float()
+            images_f = images.float()
+            with torch.amp.autocast(device_type=device.type, enabled=False):
+                recon_loss = F.l1_loss(recon, images_f)
+                perceptual_loss = perceptual(recon, images_f) if perceptual is not None else torch.zeros((), device=device)
+                vq_loss = out["vq_loss"].float()
                 loss = args.lambda_recon * recon_loss + args.lambda_perceptual * perceptual_loss + args.lambda_vq * vq_loss
+
+            if not torch.isfinite(loss):
+                message = (
+                    f"non-finite VQ loss skipped: loss={loss.item()} "
+                    f"recon={recon_loss.item()} perceptual={perceptual_loss.item()} vq={vq_loss.item()}"
+                )
+                if args.skip_nonfinite:
+                    progress.write(message)
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
+                raise FloatingPointError(message)
 
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -131,6 +147,11 @@ def main() -> None:
 
         with metrics_path.open("a", newline="", encoding="utf-8") as handle:
             csv.writer(handle).writerow([epoch + 1] + [f"{sums[key] / max(batches, 1):.6f}" for key in ("loss", "recon", "perceptual", "vq")])
+
+        if batches == 0:
+            raise FloatingPointError(
+                "Every VQ batch produced a non-finite loss. Restart from a clean run with --no-amp and a lower --lr."
+            )
 
         if (epoch + 1) % args.sample_every_epochs == 0:
             save_samples(sample_dir / f"epoch-{epoch + 1:04d}.png", model, next(iter(sample_loader)), device, args.amp)
