@@ -24,6 +24,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-size", type=int, default=512)
     parser.add_argument("--rough-steps", type=int, default=4)
     parser.add_argument("--refine-steps", type=int, default=4)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-k", type=int, default=64)
     parser.add_argument("--blur-factor", type=int, default=16)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
@@ -44,7 +46,14 @@ def load_image(path: str | Path, image_size: int) -> torch.Tensor:
 
 
 @torch.no_grad()
-def generate_tokens(model, condition: torch.Tensor, steps: int, rough_tokens: torch.Tensor | None = None) -> torch.Tensor:
+def generate_tokens(
+    model,
+    condition: torch.Tensor,
+    steps: int,
+    rough_tokens: torch.Tensor | None = None,
+    temperature: float = 1.0,
+    top_k: int = 64,
+) -> torch.Tensor:
     b = condition.shape[0]
     grid = model.config.grid_size
     tokens = torch.full((b, grid, grid), model.mask_token_id, device=condition.device, dtype=torch.long)
@@ -52,8 +61,16 @@ def generate_tokens(model, condition: torch.Tensor, steps: int, rough_tokens: to
     total = grid * grid
     for step in range(max(steps, 1)):
         logits = model(tokens, condition, rough_tokens)
-        probs = logits.softmax(dim=1)
-        confidence, pred = probs.max(dim=1)
+        if top_k > 0 and top_k < logits.shape[1]:
+            top_values, top_indices = logits.topk(top_k, dim=1)
+            probs_top = (top_values / max(temperature, 1e-6)).softmax(dim=1)
+            sampled = torch.multinomial(probs_top.permute(0, 2, 3, 1).reshape(-1, top_k), 1).view(b, grid, grid)
+            pred = top_indices.permute(0, 2, 3, 1).gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+            confidence = probs_top.permute(0, 2, 3, 1).gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+        else:
+            probs = (logits / max(temperature, 1e-6)).softmax(dim=1)
+            pred = torch.multinomial(probs.permute(0, 2, 3, 1).reshape(-1, logits.shape[1]), 1).view(b, grid, grid)
+            confidence = probs.permute(0, 2, 3, 1).gather(-1, pred.unsqueeze(-1)).squeeze(-1)
         tokens = torch.where(unknown, pred, tokens)
         next_unknown_count = int(round(total * torch.cos(torch.tensor((step + 1) / max(steps, 1) * torch.pi * 0.5)).item()))
         if step == steps - 1:
@@ -89,8 +106,8 @@ def main() -> None:
     source = load_image(args.input, args.image_size).to(device)
     condition = token_source_condition(source, args.blur_factor)
     with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
-        rough_tokens = generate_tokens(rough_model, condition, args.rough_steps)
-        final_tokens = generate_tokens(refine_model, condition, args.refine_steps, rough_tokens)
+        rough_tokens = generate_tokens(rough_model, condition, args.rough_steps, temperature=args.temperature, top_k=args.top_k)
+        final_tokens = generate_tokens(refine_model, condition, args.refine_steps, rough_tokens, temperature=args.temperature, top_k=args.top_k)
         output = tokenizer.decode_indices(final_tokens)
 
     output_path = Path(args.output)

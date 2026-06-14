@@ -38,27 +38,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.05)
     parser.add_argument("--blur-factor", type=int, default=16)
     parser.add_argument("--mask-schedule", choices=["cosine", "uniform"], default="cosine")
+    parser.add_argument("--min-mask-ratio", type=float, default=0.05)
+    parser.add_argument("--full-mask-prob", type=float, default=0.15)
     parser.add_argument("--teacher-forcing-rough-prob", type=float, default=0.7)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--save-every-epochs", type=int, default=5)
     parser.add_argument("--sample-every-epochs", type=int, default=2)
     parser.add_argument("--sample-steps", type=int, default=4)
+    parser.add_argument("--sample-temperature", type=float, default=1.0)
+    parser.add_argument("--sample-top-k", type=int, default=64)
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--resume", default="")
     return parser.parse_args()
 
 
-def mask_ratio(batch_size: int, device: torch.device, schedule: str) -> torch.Tensor:
+def mask_ratio(batch_size: int, device: torch.device, schedule: str, min_mask_ratio: float) -> torch.Tensor:
     r = torch.rand(batch_size, device=device)
     if schedule == "cosine":
-        return torch.cos(r * torch.pi * 0.5).clamp(0.05, 1.0)
-    return r.clamp(0.05, 1.0)
+        return torch.cos(r * torch.pi * 0.5).clamp(min_mask_ratio, 1.0)
+    return r.clamp(min_mask_ratio, 1.0)
 
 
-def make_masked_tokens(target: torch.Tensor, mask_token_id: int, schedule: str) -> tuple[torch.Tensor, torch.Tensor]:
+def make_masked_tokens(
+    target: torch.Tensor,
+    mask_token_id: int,
+    schedule: str,
+    min_mask_ratio: float,
+    full_mask_prob: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
     b, h, w = target.shape
-    ratios = mask_ratio(b, target.device, schedule).view(b, 1, 1)
+    ratios = mask_ratio(b, target.device, schedule, min_mask_ratio)
+    if full_mask_prob > 0:
+        full_mask_items = torch.rand(b, device=target.device) < full_mask_prob
+        ratios = torch.where(full_mask_items, torch.ones_like(ratios), ratios)
+    ratios = ratios.view(b, 1, 1)
     mask = torch.rand(b, h, w, device=target.device) < ratios
     flat_mask = mask.view(b, -1)
     empty = flat_mask.sum(dim=1) == 0
@@ -76,6 +90,8 @@ def generate_tokens(
     condition: torch.Tensor,
     steps: int,
     rough_tokens: torch.Tensor | None = None,
+    temperature: float = 1.0,
+    top_k: int = 64,
 ) -> torch.Tensor:
     b = condition.shape[0]
     grid = model.config.grid_size
@@ -84,8 +100,16 @@ def generate_tokens(
     total = grid * grid
     for step in range(max(steps, 1)):
         logits = model(tokens, condition, rough_tokens)
-        probs = logits.softmax(dim=1)
-        confidence, pred = probs.max(dim=1)
+        if top_k > 0 and top_k < logits.shape[1]:
+            top_values, top_indices = logits.topk(top_k, dim=1)
+            probs_top = (top_values / max(temperature, 1e-6)).softmax(dim=1)
+            sampled = torch.multinomial(probs_top.permute(0, 2, 3, 1).reshape(-1, top_k), 1).view(b, grid, grid)
+            pred = top_indices.permute(0, 2, 3, 1).gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+            confidence = probs_top.permute(0, 2, 3, 1).gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+        else:
+            probs = (logits / max(temperature, 1e-6)).softmax(dim=1)
+            pred = torch.multinomial(probs.permute(0, 2, 3, 1).reshape(-1, logits.shape[1]), 1).view(b, grid, grid)
+            confidence = probs.permute(0, 2, 3, 1).gather(-1, pred.unsqueeze(-1)).squeeze(-1)
         tokens = torch.where(unknown, pred, tokens)
         next_unknown_count = int(round(total * torch.cos(torch.tensor((step + 1) / max(steps, 1) * torch.pi * 0.5)).item()))
         if step == steps - 1:
@@ -148,13 +172,20 @@ def save_samples(path: Path, model, tokenizer, batch, args, device: torch.device
     rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
     final_tokens = batch["final_tokens"].to(device, non_blocking=True)
     if args.stage == "rough":
-        pred_tokens = generate_tokens(model, cond, args.sample_steps)
+        pred_tokens = generate_tokens(model, cond, args.sample_steps, temperature=args.sample_temperature, top_k=args.sample_top_k)
         pred = tokenizer.decode_indices(pred_tokens)
         target = batch["rough"].to(device, non_blocking=True)
         grid = torch.cat([source, pred, target], dim=0)
     else:
         rough_for_cond = rough_tokens
-        pred_tokens = generate_tokens(model, cond, args.sample_steps, rough_for_cond)
+        pred_tokens = generate_tokens(
+            model,
+            cond,
+            args.sample_steps,
+            rough_for_cond,
+            temperature=args.sample_temperature,
+            top_k=args.sample_top_k,
+        )
         rough_image = tokenizer.decode_indices(rough_for_cond)
         pred = tokenizer.decode_indices(pred_tokens)
         target = batch["final"].to(device, non_blocking=True)
@@ -230,12 +261,24 @@ def main() -> None:
             rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
             final_tokens = batch["final_tokens"].to(device, non_blocking=True)
             target_tokens = rough_tokens if args.stage == "rough" else final_tokens
-            masked_tokens, mask = make_masked_tokens(target_tokens, model.mask_token_id, args.mask_schedule)
+            masked_tokens, mask = make_masked_tokens(
+                target_tokens,
+                model.mask_token_id,
+                args.mask_schedule,
+                args.min_mask_ratio,
+                args.full_mask_prob,
+            )
 
             rough_condition_tokens = rough_tokens
             if args.stage == "refine" and rough_condition_model is not None and torch.rand((), device=device).item() > args.teacher_forcing_rough_prob:
                 with torch.no_grad():
-                    rough_condition_tokens = generate_tokens(rough_condition_model, cond, args.sample_steps)
+                    rough_condition_tokens = generate_tokens(
+                        rough_condition_model,
+                        cond,
+                        args.sample_steps,
+                        temperature=args.sample_temperature,
+                        top_k=args.sample_top_k,
+                    )
 
             with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
                 logits = model(masked_tokens, cond, rough_condition_tokens if args.stage == "refine" else None)
