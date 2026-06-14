@@ -57,6 +57,14 @@ def codebook_stats(indices: torch.Tensor, codebook_size: int) -> tuple[float, fl
     return used, perplexity
 
 
+def color_loss(recon: torch.Tensor, target: torch.Tensor, pool_factor: int) -> torch.Tensor:
+    if pool_factor <= 1:
+        return F.l1_loss(recon, target)
+    recon_low = F.avg_pool2d(recon, kernel_size=pool_factor, stride=pool_factor)
+    target_low = F.avg_pool2d(target, kernel_size=pool_factor, stride=pool_factor)
+    return F.l1_loss(recon_low, target_low)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rough-dir", required=True)
@@ -74,9 +82,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--commitment-cost", type=float, default=0.25)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--lambda-recon", type=float, default=1.0)
+    parser.add_argument("--lambda-color", type=float, default=0.0)
     parser.add_argument("--lambda-perceptual", type=float, default=0.2)
     parser.add_argument("--lambda-vq", type=float, default=1.0)
     parser.add_argument("--lambda-gan", type=float, default=0.0)
+    parser.add_argument("--color-pool-factor", type=int, default=8)
     parser.add_argument("--gan-start-epoch", type=int, default=10)
     parser.add_argument("--disc-base-channels", type=int, default=64)
     parser.add_argument("--skip-nonfinite", action=argparse.BooleanOptionalAction, default=True)
@@ -154,10 +164,20 @@ def main() -> None:
 
     if not metrics_path.exists() or start_epoch == 0:
         with metrics_path.open("w", newline="", encoding="utf-8") as handle:
-            csv.writer(handle).writerow(["epoch", "loss", "recon", "perceptual", "vq", "gan_g", "gan_d", "codebook_used", "perplexity"])
+            csv.writer(handle).writerow(["epoch", "loss", "recon", "color", "perceptual", "vq", "gan_g", "gan_d", "codebook_used", "perplexity"])
 
     for epoch in range(start_epoch, args.epochs):
-        sums = {"loss": 0.0, "recon": 0.0, "perceptual": 0.0, "vq": 0.0, "gan_g": 0.0, "gan_d": 0.0, "used": 0.0, "perplexity": 0.0}
+        sums = {
+            "loss": 0.0,
+            "recon": 0.0,
+            "color": 0.0,
+            "perceptual": 0.0,
+            "vq": 0.0,
+            "gan_g": 0.0,
+            "gan_d": 0.0,
+            "used": 0.0,
+            "perplexity": 0.0,
+        }
         batches = 0
         progress = tqdm(loader, desc=f"vq epoch {epoch + 1}/{args.epochs}")
         for batch in progress:
@@ -170,16 +190,23 @@ def main() -> None:
             gan_g_loss = torch.zeros((), device=device)
             with torch.amp.autocast(device_type=device.type, enabled=False):
                 recon_loss = F.l1_loss(recon, images_f)
+                low_color_loss = color_loss(recon, images_f, args.color_pool_factor)
                 perceptual_loss = perceptual(recon, images_f) if perceptual is not None else torch.zeros((), device=device)
                 vq_loss = out["vq_loss"].float()
                 if discriminator is not None and epoch + 1 >= args.gan_start_epoch:
                     gan_g_loss = generator_gan_loss(discriminator(recon))
-                loss = args.lambda_recon * recon_loss + args.lambda_perceptual * perceptual_loss + args.lambda_vq * vq_loss + args.lambda_gan * gan_g_loss
+                loss = (
+                    args.lambda_recon * recon_loss
+                    + args.lambda_color * low_color_loss
+                    + args.lambda_perceptual * perceptual_loss
+                    + args.lambda_vq * vq_loss
+                    + args.lambda_gan * gan_g_loss
+                )
 
             if not torch.isfinite(loss):
                 message = (
                     f"non-finite VQ loss skipped: loss={loss.item()} "
-                    f"recon={recon_loss.item()} perceptual={perceptual_loss.item()} vq={vq_loss.item()}"
+                    f"recon={recon_loss.item()} color={low_color_loss.item()} perceptual={perceptual_loss.item()} vq={vq_loss.item()}"
                 )
                 if args.skip_nonfinite:
                     progress.write(message)
@@ -212,6 +239,7 @@ def main() -> None:
             batches += 1
             sums["loss"] += loss.item()
             sums["recon"] += recon_loss.item()
+            sums["color"] += low_color_loss.item()
             sums["perceptual"] += perceptual_loss.item()
             sums["vq"] += vq_loss.item()
             sums["gan_g"] += gan_g_loss.item()
@@ -222,6 +250,7 @@ def main() -> None:
                 {
                     "loss": f"{loss.item():.3f}",
                     "recon": f"{recon_loss.item():.3f}",
+                    "color": f"{low_color_loss.item():.3f}",
                     "vq": f"{vq_loss.item():.3f}",
                     "used": f"{used:.2f}",
                 }
@@ -232,7 +261,7 @@ def main() -> None:
                 [epoch + 1]
                 + [
                     f"{sums[key] / max(batches, 1):.6f}"
-                    for key in ("loss", "recon", "perceptual", "vq", "gan_g", "gan_d", "used", "perplexity")
+                    for key in ("loss", "recon", "color", "perceptual", "vq", "gan_g", "gan_d", "used", "perplexity")
                 ]
             )
 
