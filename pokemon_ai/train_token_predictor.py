@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask-schedule", choices=["cosine", "uniform"], default="cosine")
     parser.add_argument("--min-mask-ratio", type=float, default=0.05)
     parser.add_argument("--full-mask-prob", type=float, default=0.15)
+    parser.add_argument("--foreground-loss-weight", type=float, default=4.0)
+    parser.add_argument("--edge-loss-weight", type=float, default=2.0)
     parser.add_argument("--teacher-forcing-rough-prob", type=float, default=0.7)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--save-every-epochs", type=int, default=5)
@@ -157,9 +159,36 @@ def build_token_cache(args: argparse.Namespace, tokenizer, device: torch.device)
     return cache_dir
 
 
-def token_loss(logits: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def target_weight_map(target_image: torch.Tensor, foreground_weight: float, edge_weight: float) -> torch.Tensor:
+    image = (target_image.float().clamp(-1, 1) + 1.0) * 0.5
+    saturation = image.max(dim=1).values - image.min(dim=1).values
+    not_white = (1.0 - image.mean(dim=1)).clamp(0, 1)
+    foreground = ((saturation > 0.08) | (not_white > 0.18)).float()
+
+    gray = image.mean(dim=1, keepdim=True)
+    dx = F.pad((gray[:, :, :, 1:] - gray[:, :, :, :-1]).abs(), (0, 1, 0, 0))
+    dy = F.pad((gray[:, :, 1:, :] - gray[:, :, :-1, :]).abs(), (0, 0, 0, 1))
+    edges = (dx + dy).amax(dim=1).clamp(0, 1)
+
+    weights = 1.0 + foreground * max(foreground_weight - 1.0, 0.0) + edges * edge_weight
+    return weights
+
+
+def token_loss(logits: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, weights: torch.Tensor | None = None) -> torch.Tensor:
     loss = F.cross_entropy(logits, target, reduction="none")
-    return (loss * mask.float()).sum() / mask.float().sum().clamp_min(1.0)
+    effective = mask.float()
+    if weights is not None:
+        if weights.shape[-2:] != target.shape[-2:]:
+            weights = F.interpolate(weights.unsqueeze(1), size=target.shape[-2:], mode="area").squeeze(1)
+        effective = effective * weights
+    return (loss * effective).sum() / effective.sum().clamp_min(1.0)
+
+
+def atomic_torch_save(state: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(state, tmp_path)
+    tmp_path.replace(path)
 
 
 @torch.no_grad()
@@ -261,6 +290,8 @@ def main() -> None:
             rough_tokens = batch["rough_tokens"].to(device, non_blocking=True)
             final_tokens = batch["final_tokens"].to(device, non_blocking=True)
             target_tokens = rough_tokens if args.stage == "rough" else final_tokens
+            target_image = batch["rough" if args.stage == "rough" else "final"].to(device, non_blocking=True)
+            weights = target_weight_map(target_image, args.foreground_loss_weight, args.edge_loss_weight)
             masked_tokens, mask = make_masked_tokens(
                 target_tokens,
                 model.mask_token_id,
@@ -282,7 +313,7 @@ def main() -> None:
 
             with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
                 logits = model(masked_tokens, cond, rough_condition_tokens if args.stage == "refine" else None)
-                loss = token_loss(logits, target_tokens, mask)
+                loss = token_loss(logits, target_tokens, mask, weights)
 
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -314,9 +345,9 @@ def main() -> None:
             "args": vars(args),
         }
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(state, checkpoint_dir / "latest.pt")
+        atomic_torch_save(state, checkpoint_dir / "latest.pt")
         if (epoch + 1) % args.save_every_epochs == 0:
-            torch.save(state, checkpoint_dir / f"epoch-{epoch + 1:04d}.pt")
+            atomic_torch_save(state, checkpoint_dir / f"epoch-{epoch + 1:04d}.pt")
 
 
 if __name__ == "__main__":
